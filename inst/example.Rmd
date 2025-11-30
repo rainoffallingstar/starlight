@@ -1,0 +1,140 @@
+---
+title: "超算使用说明"
+author: "Yanhua Zheng"
+date: "2025-11-30"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 中山大学超算集群使用简明指南
+
+## Step 1：服务器连接与配置
+
+超算服务器支持 SSH 协议访问及 SFTP 文件传输。推荐使用 **Terminus**、**MobaXterm** 或 **VS Code (Remote-SSH)** 等工具进行连接。
+
+### 连接参数配置
+
+请根据下表在 SSH 客户端中新建主机连接：
+
+| 配置项           | 参数值             | 说明                       |
+|:-----------------|:-------------------|:---------------------------|
+| **主机 IP**      | `121.46.19.4`      | 公网访问 IP                |
+| **端口 (Port)**  | `6666`             | 非默认端口，请注意修改     |
+| **用户名**       | `sysu_wzhqian_1`   | 您的超算账号               |
+| **认证方式**     | 密钥 (Private Key) | 请加载管理员下发的私钥文件 |
+| **标签 (Label)** | SYSU-HPC           | (可选) 便于识别的名称      |
+
+------------------------------------------------------------------------
+
+## Step 2：环境配置 (联网与 Conda)
+
+> **注意**：普通用户无管理员 (`root`) 权限，且节点默认无法连接外网。软件环境需通过设置代理并使用 Conda 进行管理。
+
+### 1. 配置外网连接代理
+
+首次登录后，需配置代理以便节点可以访问外部网络（如下载数据或安装包）。请在终端执行以下命令：
+
+``` bash
+# 注意：使用 >> 追加配置，避免覆盖原文件
+echo "source /APP/u22/ai_x86/toolshs/setproxy.sh 172.16.31.200 3138" >> ~/.bashrc
+
+# 使配置立即生效
+source ~/.bashrc
+```
+
+### 2. 安装 Miniconda3
+
+建议安装 Miniconda 来管理 Python 环境和软件包：
+
+``` bash
+# 创建目录并下载安装脚本
+mkdir -p ~/miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
+
+# 运行安装 (自动确认许可协议)
+bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
+
+# 清理安装包
+rm ~/miniconda3/miniconda.sh
+
+# 激活 conda 并初始化 Shell
+source ~/miniconda3/bin/activate
+conda init --all
+```
+
+*安装完成后，建议**断开并重新连接** SSH，以确保 Conda 环境自动加载。*
+
+------------------------------------------------------------------------
+
+## Step 3：Slurm 集群任务提交
+
+本超算系统包含 `mars` 和 `deimos` 两个计算分区。所有计算任务必须通过 **Slurm 调度系统** 提交，严禁在登录节点直接运行高负载任务。
+
+### 1. 登录节点使用规范
+
+-   **允许**：文件管理、代码编辑、软件安装、环境配置。
+
+-   **禁止**：运行高负载计算任务。
+
+    > **警告**：登录节点运行大规模分析属于违规操作，进程可能会被系统自动查杀。仅限运行 5 分钟以内的调试脚本（薅羊毛的一种方式）。
+
+### 2. 交互式任务提交 (`srun`)
+
+适用于调试代码或需要实时交互的任务。
+
+``` bash
+# 格式参考：srun -p [分区名] -N [节点数] -n [任务数] --cpus-per-task=[核数] --mem=[内存] [命令]
+
+# 示例：申请 mars 分区，10个CPU核心，100G内存，运行 R 脚本
+srun -p mars -N 1 -n 1 --cpus-per-task=10 --mem=100G conda run -n base Rscript script.R
+```
+
+### 3. 批处理任务提交 (`sbatch`)
+
+适用于正式的、长时间运行的计算任务。需编写 `.sh` 脚本文件。
+
+**脚本示例 (`task.sh`)：**
+
+``` bash
+#!/bin/bash
+#SBATCH --job-name=my_train      # 任务名称
+#SBATCH --partition=mars         # 指定分区 (mars 或 deimos)
+#SBATCH --nodes=1                # 申请 1 个节点
+#SBATCH --ntasks-per-node=1      # 运行 1 个任务
+#SBATCH --cpus-per-task=8        # 该任务使用 8 个 CPU 核心
+#SBATCH --mem=32G                # 申请 32GB 内存
+#SBATCH --output=logs/res_%j.log # 标准输出日志 (%j 代表任务ID)
+#SBATCH --error=logs/err_%j.log  # 错误日志
+
+# --- 以下为执行命令 ---
+source ~/miniconda3/bin/activate # 激活 conda
+conda activate pytorch_env       # 激活特定环境 (需预先创建)
+
+echo "Job start at $(date)"
+python train.py --data ./bigdata
+echo "Job end at $(date)"
+```
+
+**提交命令：**
+
+``` bash
+sbatch task.sh
+```
+
+------------------------------------------------------------------------
+
+## Step 4：常用管理命令
+
+| 作用             | 命令                         | 备注                   |
+|:-----------------|:-----------------------------|:-----------------------|
+| **查看作业状态** | `squeue -u $USER`            | 查看当前用户的所有任务 |
+| **取消作业**     | `scancel [Job_ID]`           | 终止指定的任务         |
+| **查看分区状态** | `sinfo`                      | 查看节点空闲情况       |
+| **查看作业详情** | `scontrol show job [Job_ID]` | 查看任务详细资源占用   |
+
+------------------------------------------------------------------------
