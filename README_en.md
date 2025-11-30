@@ -1,5 +1,7 @@
 # 🤖 Starlight LLM Chat Client (CLI)
 
+[简体中文](https://github.com/rainoffallingstar/starlight)\|[English](https://github.com/rainoffallingstar/starlight/blob/main/README_en.md)
+
 This is a versatile command-line interface (CLI) client for large language models (LLMs), developed in R. It's not just powerful, featuring streaming output and multi-provider support, but also boasts a beautifully designed terminal user interface (TUI).
 
 ![R Script](https://img.shields.io/badge/Language-R-blue.svg) ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -97,7 +99,7 @@ Rscript starlight.R -q "I'm a beginner, tell me how to use a supercomputer in a 
 ## 📋 Parameter Details
 
 | Parameter (Short/Long) | Type | Default Value | Description |
-|:---|:---|:---|:---|
+|:-------------|:-------------|:-------------|:------------------------------|
 | `-q`, `--question` | String | (Default question) | **Required**. The question you want to send to the model. |
 | `-S`, `--system` | String | "You are..." | **New**. The system prompt to define the model's behavior/persona. |
 | `-p`, `--provider` | String | Random | Specify the provider name configured in the `.env` file. |
