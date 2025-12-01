@@ -50,3 +50,6 @@ rsconnect/
 
 # env file
 .env
+
+# chat_log
+chat_log/*.json

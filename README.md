@@ -1,168 +1,147 @@
-# 🤖 Starlight LLM Chat Client (CLI)
+# 🤖 Starlight CLI (星光通用大模型聊天客户端)
 
-[简体中文](https://github.com/rainoffallingstar/starlight)\|[English](https://github.com/rainoffallingstar/starlight/blob/main/README_en.md)
+**Version 1.5.0**
 
-这是一个基于 R 语言开发的通用大模型命令行客户端。它不仅功能强大，支持流式输出和多服务商配置，还拥有经过精心设计的美观终端界面（TUI）。
+Starlight CLI 是一个基于 R 语言构建的轻量级、功能丰富的终端大模型（LLM）聊天客户端。它支持流式响应、自动会话管理、历史记录压缩以及多种对话控制指令，旨在提供纯粹、高效的命令行交互体验。
 
-![R Script](https://img.shields.io/badge/Language-R-blue.svg) ![License](https://img.shields.io/badge/License-MIT-green.svg)
+Starlight CLI is a lightweight, feature-rich terminal-based Large Language Model (LLM) chat client built with R. It features streaming responses, automatic session management, history compression, and various conversation control commands, designed to provide a pure and efficient command-line interaction experience.
 
-## ✨ 主要特性
+------------------------------------------------------------------------
 
--   **🎨 精美 UI**: 使用 `cli` 和 `crayon` 打造的彩色终端界面，包含进度条、边框和状态图标。
--   **🌊 流式输出 (Streaming)**: 支持 Server-Sent Events (SSE)，实现类似 ChatGPT 网页版的打字机即时输出效果。
--   **🧠 推理过程展示**: 完美支持 DeepSeek-R1 等推理模型，能够区分并高亮显示模型的“思考过程” (Reasoning) 和“最终回答”。
--   **🎭 System Prompt 支持**: 支持通过命令行自定义系统提示词（人设），让模型扮演特定角色。
--   **🔌 多服务商/多模型**: 通过 `.env` 配置文件轻松管理多个 API 服务商（如 OpenAI, DeepSeek, Ollama 等）和模型。
--   **📄 上下文感知**: 支持自动加载本地文档（如 README）作为对话上下文。
+## ✨ 主要特性 / Key Features
 
-## 🛠️ 环境准备
+-   **流式响应 (Streaming Output)**: 实时逐字显示 AI 回复，支持“思维链” (Chain of Thought) 内容的高亮显示。
+    -   *Real-time token streaming with syntax highlighting for "Chain of Thought" reasoning.*
+-   **智能会话管理 (Smart Session Management)**:
+    -   自动生成会话标题 (Auto-generated session titles based on context).
+    -   支持保存、恢复、切换 (`/switch`) 和删除 (`/delete`) 会话。
+    -   *Save, restore, switch, and delete sessions locally.*
+-   **上下文优化 (Context Optimization)**:
+    -   **历史压缩**: 使用 `/compress` 指令将长对话总结为摘要，节省 Token 并保留核心记忆。
+    -   *History compression via `/compress` to summarize long chats and save tokens.*
+    -   **长期记忆**: 支持通过 `/setmemory` 注入长期记忆槽位。
+    -   *Long-term memory injection via `/setmemory`.*
+-   **文件读取 (File Loading)**: 通过 `/addtext` 将本地文本文件加载到对话上下文中。
+    -   *Load local text files into context using `/addtext`.*
+-   **多模型支持 (Multi-Model Support)**: 兼容 OpenAI 格式 API，支持动态切换模型 (`/setmodel`)。
+    -   *Compatible with OpenAI-format APIs, allowing dynamic model switching.*
 
-### 1. 安装 R
+------------------------------------------------------------------------
 
-确保你的系统已安装 R 语言环境。
+## 🛠️ 安装要求 / Prerequisites
 
-### 2. 安装依赖包
+确保您的系统已安装 **R 语言环境** (Recommend R \>= 4.0.0)。
 
-打开 R 或 RStudio，运行以下命令安装必要的依赖库：
+Ensure you have **R environment** installed (Recommend R \>= 4.0.0).
+
+### 📦 依赖包 / Dependencies
+
+在 R 控制台运行以下命令安装所需依赖： Run the following command in your R console to install dependencies:
 
 ``` r
 install.packages(c("optparse", "httr", "jsonlite", "yaml", "cli", "crayon"))
 ```
 
-## ⚙️ 配置指南
+------------------------------------------------------------------------
 
-在脚本同级目录下创建一个名为 `.env` 的文件。这是一个 YAML 格式的配置文件，用于存储 API 密钥和端点信息(兼容openai格式)。
+## ⚙️ 配置 / Configuration
 
-**`.env` 文件示例：**
+在脚本同级目录下创建一个名为 `.env` 的文件，使用 YAML 格式配置您的 API 信息。 Create a `.env` file in the same directory using YAML format to configure your API credentials.
+
+**示例 / Example `.env`:**
 
 ``` yaml
-# DeepSeek API
+# 提供商名称 (Provider Name)
 deepseek:
   baseurl: "https://api.deepseek.com/v1/chat/completions"
-  api_key: "sk-your-deepseek-key"
-  model:
+  api_key: "sk-your-api-key-here"
+  model: 
     - "deepseek-chat"
-    - "deepseek-reasoner"
+    - "deepseek-coder"
 
-# 本地 Ollama (无需 Key)
-ollama:
-  baseurl: "http://localhost:11434/v1/chat/completions"
-  api_key: "ollama"
-  model:
-    - "llama3"
-    - "qwen2.5"
-
-# 兼容 OpenAI 格式的其他服务
-other_provider:
-  baseurl: "https://api.example.com/v1/chat/completions"
-  api_key: "sk-xxxxxx"
+openai:
+  baseurl: "https://api.openai.com/v1/chat/completions"
+  api_key: "sk-your-openai-key"
   model:
     - "gpt-4o"
+    - "gpt-3.5-turbo"
 ```
-
-## 🚀 使用方法
-
-脚本保存为 `starlight.R`。
-
-### 1. 基础对话
-
-随机选择一个配置的服务商和模型进行提问。
-
-``` bash
-Rscript starlight.R -q "你好，请用一句话介绍 R 语言"
-```
-
-### 2. 设定人设 (System Prompt) 🆕
-
-使用 `-S` 或 `--system` 参数设定 AI 的角色。
-
-``` bash
-Rscript starlight.R -S "你是一个只会说文言文的古代书生" -q "今天天气不错"
-```
-
-### 3. 指定服务商和模型
-
-使用 `-p` 指定服务商（对应 `.env` 中的 key），使用 `-m` 指定模型名称。
-
-``` bash
-Rscript starlight.R -p deepseek -m deepseek-reasoner -q "分析一下 9.11 和 9.9 哪个大"
-```
-
-### 4. 隐藏/显示推理过程
-
-默认情况下，如果模型返回推理内容（如 DeepSeek-R1），脚本会显示它。你可以通过 `-s` 控制。
-
-``` bash
-# 隐藏推理过程，只看结果
-Rscript starlight.R -s FALSE -q "复杂的数学问题..."
-```
-
-### 5. 添加文本文件作为上下文
-
-默认情况下，如果需要添加文本文件作为上下文，脚本会显示它。你可以通过 `-t` 控制。
-
-``` {.bash .bash}
-# 添加文本文件作为上下文
-Rscript starlight.R  -q "我是小白，使用幽默风趣的语言告诉我怎么使用超算"  --model deepseek-ai/DeepSeek-V3.2-Exp-thinking --use_text inst/example.Rmd
-```
-
-## 📋 参数详解
-
-| 参数 (简写/全称) | 类型 | 默认值 | 说明 |
-|:-----------------|:-----------------|:-----------------|:-----------------|
-| `-q`, `--question` | 字符 | (默认问题) | **必填**。你要发送给模型的问题内容。 |
-| `-S`, `--system` | 字符 | "你是一个..." | **新增**。系统提示词，用于设定模型行为/人设。 |
-| `-p`, `--provider` | 字符 | Random | 指定 `.env` 文件中配置的服务商名称。 |
-| `-m`, `--model` | 字符 | Random | 指定要使用的模型名称。 |
-| `-s`, `--show_reasoning` | 逻辑 | `TRUE` | 是否显示模型的思维链/推理过程（黄色高亮）。 |
-| `-t`,`--use_text` | 字符 | `NULL` | 读取指定目录的文本文件作为附加上下文。 |
-
-## 🖼️ 运行效果预览
-
-脚本运行时会呈现如下结构的彩色输出：
-
-``` text
-════════════════════════════════════════════════════════════════════════════════
-    🤖 Starlight LLM 聊天客户端 v1.1
-════════════════════════════════════════════════════════════════════════════════
-
-📁 加载配置文件 .env ... done
-🎯 使用指定服务商: deepseek
-🎲 随机选择模型: deepseek-reasoner
-
-📋 配置摘要
-  ├─ 服务商: deepseek
-  ├─ 模型:   deepseek-reasoner
-  ├─ API:    https://api.deepseek.com/v1...
-  ├─ System: 你是一个专业的程序员...
-  └─ 推理:   ✓ 显示
-
-╭──────────────────────────────── 用户问题 ────────────────────────────────╮
-│ 用 R 语言写一个 Hello World                                              │
-╰──────────────────────────────────────────────────────────────────────────╯
-
-🚀 开始对话
-
-┌────────────────────────────────────────────────────────────────────┐
-│ 💭 推理过程                                                         │
-│ 用户想要 R 语言的 Hello World 代码...                                 │
-└────────────────────────────────────────────────────────────────────┘
-
-┌────────────────────────────────────────────────────────────────────┐
-│ 🤖 AI 回答                                                          │
-│ 这是一个标准的 R 语言 Hello World 示例...                             │
-└────────────────────────────────────────────────────────────────────┘
-
-✨ 对话结束
-  感谢使用 Starlight LLM 聊天客户端！
-```
-
-## ❓ 常见问题
-
-1.  **报错 `config file not found`**: 请检查当前目录下是否存在 `.env` 文件。
-2.  **报错 `cli_rule` 参数错误**: 这是一个已知兼容性问题，最新版脚本已包含自动降级修复逻辑。如果仍有问题，请尝试升级 `cli` 包：`install.packages("cli")`。
-3.  **显示乱码**: 请确保你的终端支持 UTF-8 编码以及 ANSI 转义序列（Windows 用户建议使用 Windows Terminal 或 PowerShell Core）。
 
 ------------------------------------------------------------------------
 
-*Created by fallingstar,under the help of* Gemini 2.5 pro/Gemini 3 pro/claude 4.5.
+## 🚀 使用方法 / Usage
+
+### 1. 赋予执行权限 / Make Executable
+
+``` bash
+chmod +x starlight.R
+```
+
+### 2. 启动对话 / Start Chat
+
+``` bash
+# 默认启动
+./starlight.R
+
+# 指定提供商和模型 / Specify provider and model
+./starlight.R -p deepseek -m deepseek-chat
+
+# 单次问答模式 / Single shot question
+./starlight.R -q "解释一下量子纠缠"
+```
+
+### 3. 命令行参数 / Arguments
+
+| 参数 / Flag | 全称 / Long Flag | 描述 / Description |
+|:---|:---|:---|
+| `-p` | `--provider` | 选择 `.env` 中的提供商配置 / Select provider from `.env` |
+| `-m` | `--model` | 指定使用的模型名称 / Specify model name |
+| `-S` | `--system` | 设置系统提示词 (System Prompt) / Set System Prompt |
+| `-s` | `--show_reasoning` | 显示推理过程 (默认开启) / Show reasoning trace (Default: True) |
+| `-q` | `--question` | 单次提问并退出 / Ask a single question and exit |
+| `-r` | `--resume` | 恢复加载最新对话 / Resume latest conversation(Default: FALSE) |
+
+------------------------------------------------------------------------
+
+## 🎮 指令指南 / Command Guide
+
+在对话过程中，输入以下指令进行控制： Type the following commands during the chat for control:
+
+### 📂 会话管理 / Session Management
+
+-   `/newsession`: 创建一个新的对话会话 / Create a new session.
+-   `/switch`: 列出并切换到历史会话 / List and switch to history sessions.
+-   `/sessions`: 查看所有已保存的会话 / View all saved sessions.
+-   `/delete [file]`: 删除指定的会话文件 / Delete a specific session file.
+-   `/title [text]`: 手动修改当前会话标题 / Manually rename session title.
+-   `/quit` 或 `/exit`: 保存并退出 / Save and exit.
+
+### 🧠 记忆与上下文 / Memory & Context
+
+-   `/clean`: 清空当前对话历史 / Clear current conversation history.
+-   `/compress`: 压缩历史记录为摘要 / Compress history into a summary.
+-   `/history`: 查看完整对话记录 (含压缩前历史) / View full history (including pre-compressed).
+-   `/setmemory [text]`: 添加长期记忆 / Append to long-term memory.
+-   `/addtext [path]`: 读取文件内容并发送 / Read and send file content.
+
+### ⚙️ 系统设置 / System Settings
+
+-   `/init`: 重新初始化 API 配置 / Re-initialize API config.
+-   `/setmodel [name]`: 切换当前模型 / Switch current model.
+-   `/lsmodel`: 从服务器获取可用模型列表 / Fetch available models from server.
+-   `/systemprompt`: 修改系统提示词 (System Prompt) / Modify System Prompt.
+-   `/execute [cmd]`: 执行系统 Shell 命令 / Execute system shell command.
+
+------------------------------------------------------------------------
+
+## 📂 文件结构 / File Structure
+
+-   `starlight.R`: 主程序脚本 / Main script.
+-   `.env`: 配置文件 (需手动创建) / Configuration file (Create manually).
+-   `chat_logs/`: 存放所有对话历史 JSON 文件的目录 / Directory storing all chat history JSON files.
+
+------------------------------------------------------------------------
+
+## 📝 License
+
+此项目仅供学习和个人使用。 This project is for educational and personal use only.

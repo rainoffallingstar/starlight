@@ -1,18 +1,13 @@
+#!/usr/bin/env Rscript
 # =========================================================================
-#
-#           🤖 星光通用大模型聊天客户端 (Starlight LLM Chat Client in R)
-#
-# 描述:
-#   本脚本是一个通用的命令行客户端,用于与兼容OpenAI API的大语言模型进行交互。
-#   支持多服务商、多模型配置,系统提示词(System Prompt),并具备流式输出能力。
-#
-# 作者: fallingstar,developed under the help of Gemini 2.5 pro/Gemini 3 pro/claude 4.5
-# 日期: 2024-01-01
-#
+#           🤖 星光通用大模型聊天客户端 (Starlight CLI)
+#          Version: 1.5.0 (单会话+自动标题生成)
 # =========================================================================
 
+# 强制设置 UTF-8 编码
+invisible(Sys.setlocale("LC_ALL", "en_US.UTF-8"))
+invisible(options(encoding = "UTF-8"))
 
-# --- 1. 加载依赖包 ---
 suppressPackageStartupMessages({
   library(optparse)
   library(httr)
@@ -22,414 +17,1079 @@ suppressPackageStartupMessages({
   library(crayon)
 })
 
-# --- 2. 定义命令行参数 ---
-option_list <- list(
-  make_option(c("-t","--use_text"), type = "character", default = NULL,
-              help = "是否加载文本文件作为上下文信息"),
-  make_option(c("-m", "--model"), type = "character", default = NULL,
-              help = "指定要使用的模型名称。如果留空,则从服务商的模型列表中随机选择一个"),
-  make_option(c("-p", "--provider"), type = "character", default = NULL,
-              help = "指定 .env 文件中配置的服务商。如果留空,则随机选择一个"),
-  make_option(c("-q", "--question"), type = "character", default = "我是小白,告诉我怎么使用这个操作手册",
-              help = "向大语言模型提出的问题"),
-  make_option(c("-S", "--system"), type = "character", default = "你是一个乐于助人的AI助手。",
-              help = "系统提示词 (System Prompt),用于设定模型的人设"),
-  make_option(c("-s", "--show_reasoning"), type = "logical", default = TRUE,
-              help = "在流式输出中,是否显示模型的思考过程")
-)
+# 空操作符定义
+`%||%` <- function(a, b) if (is.null(a)) b else a
 
-args <- parse_args(OptionParser(option_list = option_list))
+# =========================================================================
+# 1. 全局环境上下文
+# =========================================================================
+chat_context <- new.env()
+chat_context$history <- list()              # 短期对话历史
+chat_context$memory_slot <- ""              # 长期记忆
+chat_context$base_system <- ""              # 基础人设
+chat_context$config <- NULL                 # 当前配置
+chat_context$current_model <- ""            # 当前模型
+chat_context$compressed_summary <- ""       # 压缩后的摘要
+chat_context$full_history <- list()         # 完整历史记录(压缩前保留)
+chat_context$session_file <- ""             # 当前会话文件路径
+chat_context$session_title <- ""            # 会话标题
 
+# =========================================================================
+# 2. 编码安全工具
+# =========================================================================
 
-# --- 3. 辅助函数：美化输出 ---
-
-#' 打印带边框的文本块
-print_box <- function(text, title = NULL, border_color = "cyan", width = 80) {
-  border_char <- "─"
-  corner_tl <- "╭"
-  corner_tr <- "╮"
-  corner_bl <- "╰"
-  corner_br <- "╯"
-  vertical <- "│"
-  
-  color_fn <- switch(border_color,
-                     "cyan" = cyan,
-                     "green" = green,
-                     "yellow" = yellow,
-                     "blue" = blue,
-                     "magenta" = magenta,
-                     "red" = red,
-                     cyan)
-  
-  # 顶部边框
-  if (!is.null(title)) {
-    title_text <- paste0(" ", title, " ")
-    title_len <- nchar(title_text, type = "width")
-    left_len <- floor((width - title_len - 2) / 2)
-    right_len <- max(0, width - title_len - left_len - 2)
-    top_line <- paste0(
-      corner_tl,
-      strrep(border_char, left_len),
-      title_text,
-      strrep(border_char, right_len),
-      corner_tr
-    )
-  } else {
-    top_line <- paste0(corner_tl, strrep(border_char, width - 2), corner_tr)
-  }
-  
-  cat(color_fn(top_line), "\n")
-  
-  # 内容行
-  lines <- strsplit(text, "\n")[[1]]
-  for (line in lines) {
-    if (nchar(line, type = "width") > width - 4) {
-      line <- paste0(substr(line, 1, width - 7), "...")
-    }
-    padding <- max(0, width - nchar(line, type = "width") - 4)
-    cat(color_fn(vertical), " ", line, strrep(" ", padding), " ", color_fn(vertical), "\n", sep = "")
-  }
-  
-  # 底部边框
-  bottom_line <- paste0(corner_bl, strrep(border_char, width - 2), corner_br)
-  cat(color_fn(bottom_line), "\n")
-}
-
-#' 打印美化的标题
-print_header <- function(text, emoji = "🎯", color = "cyan") {
-  color_fn <- switch(color,
-                     "cyan" = cyan$bold,
-                     "green" = green$bold,
-                     "yellow" = yellow$bold,
-                     "blue" = blue$bold,
-                     "magenta" = magenta$bold,
-                     cyan$bold)
-  
-  cat("\n")
+# UTF-8 合法性检查
+validUTF8 <- function(x) {
   tryCatch({
-    cli_rule(left = paste(emoji, color_fn(text)), col = color)
+    grepl(".", x, perl = TRUE)
+    TRUE
   }, error = function(e) {
-    cli_rule(left = paste(emoji, color_fn(text)))
+    FALSE
   })
-  cat("\n")
 }
 
-#' 打印流式内容的标题
-print_stream_title <- function(text, emoji = "💬", width = 70) {
-  cat("\n")
-  cat(cyan(paste0("┌", strrep("─", width - 2), "┐")), "\n")
-  title_text <- paste(emoji, bold(text))
-  text_len <- nchar(text, type = "width") + 4 
-  padding <- max(0, width - text_len - 2)
-  cat(cyan("│"), title_text, strrep(" ", padding), cyan("│"), "\n", sep = " ")
-  cat(cyan(paste0("└", strrep("─", width - 2), "┘")), "\n")
-  cat("\n")
+# 安全字符串清理
+safe_string <- function(x) {
+  if (is.null(x) || is.na(x)) return("")
+  x <- as.character(x)
+  x <- enc2utf8(x)
+  # 移除控制字符（保留换行符和制表符）
+  x <- gsub("[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]", "", x, perl = TRUE)
+  return(x)
 }
 
+# =========================================================================
+# 3. 统一输出格式工具
+# =========================================================================
 
-# --- 4. 核心函数：与模型进行交互 ---
-
-chat_openai_compatible <- function(base_url,
-                                   user_content,
-                                   system_prompt = NULL, # 新增 system_prompt 参数
-                                   api_key = "sk-x",
-                                   model_name,
-                                   echo = c("stream", "all", "output", "none"),
-                                   stream = TRUE,
-                                   show_reasoning = TRUE) {
+print_message <- function(type, text, emoji = NULL, width = 70) {
+  type_config <- list(
+    success = list(color = green, emoji = "✓", prefix = "SUCCESS"),
+    info    = list(color = cyan, emoji = "ℹ", prefix = "INFO"),
+    warning = list(color = yellow, emoji = "⚠", prefix = "WARNING"),
+    error   = list(color = red, emoji = "✗", prefix = "ERROR"),
+    header  = list(color = magenta$bold, emoji = "★", prefix = ""),
+    stream  = list(color = cyan, emoji = "💬", prefix = "")
+  )
   
-  echo <- match.arg(echo)
-  if (echo == "stream") stream <- TRUE
+  cfg <- type_config[[type]]
+  if (is.null(cfg)) cfg <- type_config$info
+  
+  display_emoji <- if (!is.null(emoji)) emoji else cfg$emoji
+  prefix_text <- if (nchar(cfg$prefix) > 0) paste0("[", cfg$prefix, "]") else ""
+  
+  # 安全处理文本
+  text <- safe_string(text)
+  
+  if (type == "stream") {
+    cat("\n")
+    cat(cfg$color(paste0("┌", strrep("─", width - 2), "┐")), "\n")
+    title_text <- paste(display_emoji, text)
+    padding <- max(0, width - nchar(text, type="width") - 4)
+    cat(cfg$color("│"), title_text, strrep(" ", padding), cfg$color("│"), "\n")
+    cat(cfg$color(paste0("└", strrep("─", width - 2), "┘")), "\n\n")
+  } else if (type == "header") {
+    cat("\n")
+    tryCatch({
+      cli_rule(left = paste(display_emoji, cfg$color(text)), col = "cyan")
+    }, error = function(e) {
+      cat(cfg$color(paste0(strrep("─", 10), " ", display_emoji, " ", text, " ", strrep("─", 10))), "\n")
+    })
+    cat("\n")
+  } else {
+    cat(cfg$color(paste(display_emoji, prefix_text, text)), "\n")
+  }
+}
+
+msg_success <- function(text) print_message("success", text)
+msg_info <- function(text) print_message("info", text)
+msg_warning <- function(text) print_message("warning", text)
+msg_error <- function(text) print_message("error", text)
+msg_header <- function(text, emoji = "🎯") print_message("header", text, emoji)
+msg_stream <- function(text, emoji = "💬") print_message("stream", text, emoji)
+
+# =========================================================================
+# 4. 会话文件管理 (单会话+标题生成)
+# =========================================================================
+
+# 生成对话标题
+generate_session_title <- function() {
+  # 如果历史为空，返回默认标题
+  if (length(chat_context$history) == 0) {
+    return("新对话")
+  }
+  
+  # 取前3轮对话作为上下文
+  sample_history <- head(chat_context$history, 6)
+  
+  # 构建标题生成请求
+  title_messages <- c(
+    list(list(
+      role = "system",
+      content = "你是一个专业的对话标题生成助手。根据用户对话内容，生成一个简洁精准的中文标题（8-15字），直接输出标题，不要有任何其他内容。"
+    )),
+    sample_history,
+    list(list(
+      role = "user",
+      content = "请为上述对话生成一个简洁的标题（8-15字）"
+    ))
+  )
+  
+  cli_process_start("🏷️  生成对话标题中...")
+  
+  title <- simple_chat_request(title_messages)
+  
+  cli_process_done()
+  
+  if (!is.null(title) && nchar(title) > 0) {
+    # 清理标题：移除引号、空格、换行
+    title <- gsub("[\"'『』【】\n\r]", "", title)
+    title <- trimws(title)
+    
+    # 限制长度
+    if (nchar(title, type = "width") > 20) {
+      title <- substr(title, 1, 20)
+    }
+    
+    return(title)
+  }
+  
+  # 生成失败，使用首句作为标题
+  first_user_msg <- NULL
+  for (msg in chat_context$history) {
+    if (msg$role == "user") {
+      first_user_msg <- msg$content
+      break
+    }
+  }
+  
+  if (!is.null(first_user_msg)) {
+    title <- substr(first_user_msg, 1, 15)
+    if (nchar(first_user_msg) > 15) title <- paste0(title, "...")
+    return(title)
+  }
+  
+  return("新对话")
+}
+
+# 获取或创建会话文件
+init_session_file <- function(force_new = FALSE) {
+  session_dir <- file.path(getwd(), "chat_logs")
+  if (!dir.exists(session_dir)) {
+    dir.create(session_dir, recursive = TRUE)
+  }
+  
+  # 1. 如果不强制创建新会话，尝试找到最新的会话文件
+  if (!force_new) {
+    existing_files <- list.files(
+      session_dir, 
+      pattern = "^chat_.*\\.json$", 
+      full.names = TRUE
+    )
+    
+    if (length(existing_files) > 0) {
+      # 按修改时间排序，取最新的
+      latest_file <- existing_files[order(file.mtime(existing_files), decreasing = TRUE)[1]]
+      
+      # 尝试加载现有会话
+      tryCatch({
+        con <- file(latest_file, "r", encoding = "UTF-8")
+        session_data <- jsonlite::fromJSON(readLines(con, warn = FALSE), simplifyVector = FALSE)
+        close(con)
+        
+        # 恢复会话状态
+        chat_context$session_file <- latest_file
+        chat_context$current_model <- session_data$model
+        chat_context$base_system <- session_data$system_prompt
+        chat_context$memory_slot <- session_data$memory %||% ""
+        chat_context$history <- session_data$conversations %||% list()
+        chat_context$compressed_summary <- session_data$compressed_summary %||% ""
+        chat_context$full_history <- session_data$full_history_before_compress %||% list()
+        chat_context$session_title <- session_data$title %||% "未命名对话"
+        
+        msg_success(paste("已恢复会话:", chat_context$session_title))
+        msg_info(paste("创建时间:", session_data$created_at))
+        msg_info(paste("历史消息:", length(chat_context$history), "条"))
+        
+        return(latest_file)
+      }, error = function(e) {
+        msg_warning(paste("加载会话失败，将创建新会话:", e$message))
+      })
+    }
+  }
+  
+  # 2. 创建新会话文件
+  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  session_file <- file.path(session_dir, paste0("chat_", timestamp, ".json"))
+  chat_context$session_file <- session_file
+  chat_context$session_title <- "新对话"
+  
+  # 初始化会话数据
+  session_data <- list(
+    session_id = timestamp,
+    title = "新对话",
+    created_at = as.character(Sys.time()),
+    updated_at = as.character(Sys.time()),
+    model = chat_context$current_model,
+    system_prompt = chat_context$base_system,
+    memory = chat_context$memory_slot,
+    conversations = list(),
+    compressed_summary = "",
+    full_history_before_compress = list()
+  )
+  
+  save_session(session_data)
+  msg_info(paste("新会话:", basename(session_file)))
+  
+  return(session_file)
+}
+
+# 保存会话数据（增加更新时间戳）
+save_session <- function(session_data = NULL) {
+  if (is.null(session_data)) {
+    # 读取原有的创建时间
+    created_at <- tryCatch({
+      if (file.exists(chat_context$session_file)) {
+        con <- file(chat_context$session_file, "r", encoding = "UTF-8")
+        existing <- jsonlite::fromJSON(readLines(con, warn = FALSE), simplifyVector = FALSE)
+        close(con)
+        existing$created_at
+      } else {
+        as.character(Sys.time())
+      }
+    }, error = function(e) as.character(Sys.time()))
+    
+    session_data <- list(
+      session_id = gsub(".*chat_(.*)\\.json", "\\1", chat_context$session_file),
+      title = safe_string(chat_context$session_title),
+      created_at = created_at,
+      updated_at = as.character(Sys.time()),
+      model = safe_string(chat_context$current_model),
+      system_prompt = safe_string(chat_context$base_system),
+      memory = safe_string(chat_context$memory_slot),
+      conversations = chat_context$history,
+      compressed_summary = safe_string(chat_context$compressed_summary),
+      full_history_before_compress = chat_context$full_history
+    )
+  }
+  
+  tryCatch({
+    json_text <- jsonlite::toJSON(
+      session_data,
+      pretty = TRUE,
+      auto_unbox = TRUE,
+      ensure_ascii = FALSE
+    )
+    
+    con <- file(chat_context$session_file, "w", encoding = "UTF-8")
+    writeLines(enc2utf8(json_text), con, useBytes = TRUE)
+    close(con)
+  }, error = function(e) {
+    msg_warning(paste("保存会话失败:", e$message))
+  })
+}
+
+# 添加对话记录（编码安全版本）
+add_conversation <- function(user_input, assistant_reply) {
+  # 确保输入输出都是 UTF-8
+  user_input <- safe_string(user_input)
+  assistant_reply <- safe_string(assistant_reply)
+  
+  chat_context$history <- c(
+    chat_context$history,
+    list(
+      list(
+        role = "user",
+        content = user_input,
+        timestamp = as.character(Sys.time())
+      ),
+      list(
+        role = "assistant",
+        content = assistant_reply,
+        timestamp = as.character(Sys.time())
+      )
+    )
+  )
+  
+  # 每5轮对话或首次对话后自动生成标题
+  if (length(chat_context$history) == 2 || length(chat_context$history) %% 10 == 0) {
+    new_title <- generate_session_title()
+    if (new_title != chat_context$session_title) {
+      chat_context$session_title <- new_title
+      msg_info(paste("📝 对话标题已更新:", new_title))
+    }
+  }
+  
+  save_session()
+}
+
+# =========================================================================
+# 5. 辅助工具函数
+# =========================================================================
+
+read_console <- function(prompt_str) {
+  if (interactive()) {
+    input <- readline(prompt_str)
+  } else {
+    cat(prompt_str)
+    input <- readLines("stdin", n = 1, warn = FALSE)
+    if (length(input) == 0) return(NULL)
+  }
+  
+  # 确保输入为 UTF-8
+  if (!is.null(input) && length(input) > 0 && nchar(input) > 0) {
+    input <- enc2utf8(input)
+  }
+  return(input)
+}
+
+# 构建消息列表（改进版：根据是否压缩选择不同策略）
+build_messages <- function(user_input = NULL) {
+  msgs <- list()
+  
+  # 1. 基础系统提示词 + 长期记忆
+  full_system_text <- paste(
+    chat_context$base_system,
+    chat_context$memory_slot,
+    sep = "\n"
+  )
+  
+  # 2. 如果已压缩，使用摘要模式
+  if (nchar(trimws(chat_context$compressed_summary)) > 0) {
+    full_system_text <- paste(
+      full_system_text,
+      "\n\n=== 历史对话摘要 ===\n",
+      chat_context$compressed_summary,
+      "\n===================\n",
+      sep = ""
+    )
+  }
+  
+  if (nchar(trimws(full_system_text)) > 0) {
+    msgs[[1]] <- list(role = "system", content = safe_string(full_system_text))
+  }
+  
+  # 3. 当前对话历史（压缩后为空或新对话）
+  msgs <- c(msgs, chat_context$history)
+  
+  # 4. 当前用户输入
+  if (!is.null(user_input) && nchar(user_input) > 0) {
+    msgs <- c(msgs, list(list(role = "user", content = safe_string(user_input))))
+  }
+  
+  return(msgs)
+}
+
+# =========================================================================
+# 6. HTTP 请求核心
+# =========================================================================
+
+# --- A. 获取模型列表 ---
+fetch_remote_models <- function(silent_on_error = FALSE) {
+  base_url <- chat_context$config$baseurl
+  models_url <- gsub("/chat/completions/?$", "/models", base_url)
+  if (models_url == base_url) models_url <- paste0(base_url, "/models")
+  
+  if (!silent_on_error) cli_process_start("正在获取可用模型列表...")
+  
+  tryCatch({
+    resp <- httr::GET(
+      models_url,
+      add_headers(Authorization = paste("Bearer", chat_context$config$api_key))
+    )
+    
+    if (!silent_on_error) cli_process_done()
+    
+    if (status_code(resp) == 200) {
+      data <- content(resp, as = "parsed")
+      if (!is.null(data$data)) {
+        model_ids <- sapply(data$data, function(x) x$id)
+        msg_header("可用模型列表", "📦")
+        print(model_ids)
+        cat("\n")
+        return(invisible(model_ids))
+      } else {
+        if (!silent_on_error) msg_warning("返回格式不标准，无法解析模型列表")
+      }
+    } else {
+      if (!silent_on_error) {
+        msg_warning(paste("获取模型失败 HTTP", status_code(resp)))
+      }
+    }
+  }, error = function(e) {
+    if (!silent_on_error) {
+      cli_process_failed()
+      msg_warning("连接错误，跳过模型列表获取")
+    }
+  })
+}
+
+# --- B. 简单请求（用于压缩和标题生成） ---
+simple_chat_request <- function(messages) {
+  url <- chat_context$config$baseurl
+  
+  body <- list(
+    model = chat_context$current_model,
+    messages = messages,
+    stream = FALSE
+  )
   
   headers <- add_headers(
     `Content-Type` = "application/json",
-    `Authorization` = paste("Bearer", api_key)
+    `Authorization` = paste("Bearer", chat_context$config$api_key)
   )
   
-  # --- 构建消息列表 (新增逻辑) ---
-  messages_list <- list()
-  
-  # 1. 如果有 System Prompt，先添加
-  if (!is.null(system_prompt) && nchar(system_prompt) > 0) {
-    messages_list[[length(messages_list) + 1]] <- list(role = "system", content = system_prompt)
-  }
-  
-  # 2. 添加用户消息
-  messages_list[[length(messages_list) + 1]] <- list(role = "user", content = user_content)
-  
-  body_list <- list(
-    model = model_name,
-    messages = messages_list,
-    stream = stream
-  )
-  
-  # 非流式模式
-  if (!stream) {
-    cli_process_start("正在发送请求到 {.url {base_url}}")
-    response <- httr::POST(
-      url = base_url,
-      config = headers,
-      body = body_list,
-      encode = "json"
-    )
-    stop_for_status(response, task = "查询 API")
-    cli_process_done()
-    cli_alert_success("请求成功！")
-    
-    parsed_response <- content(response, as = "parsed")
-    
-    if (echo == "output") {
-      cat(parsed_response$choices[[1]]$message$content, "\n")
-    } else if (echo == "all") {
-      print_header("用户问题", "❓", "blue")
-      cat(user_content, "\n")
-      
-      if (!is.null(parsed_response$choices[[1]]$message$reasoning_content)) {
-        print_header("推理过程", "💭", "yellow")
-        cat(parsed_response$choices[[1]]$message$reasoning_content, "\n")
-      }
-      
-      print_header("AI 回答", "💬", "green")
-      cat(parsed_response$choices[[1]]$message$content, "\n")
+  tryCatch({
+    resp <- POST(url, headers, body = body, encode = "json")
+    if (status_code(resp) == 200) {
+      result <- content(resp, as = "parsed")$choices[[1]]$message$content
+      return(safe_string(result))
     }
-    return(invisible(parsed_response))
-  }
+  }, error = function(e) return(NULL))
   
-  # --- 流式处理 ---
-  cli_process_start("正在建立流式连接到 {.url {base_url}}")
+  return(NULL)
+}
+
+# --- C. 流式对话（修复版） ---
+stream_chat <- function(messages, show_reasoning = TRUE) {
+  url <- chat_context$config$baseurl
   
-  full_reasoning <- ""
+  body <- list(
+    model = chat_context$current_model,
+    messages = messages,
+    stream = TRUE
+  )
+  
+  headers <- add_headers(
+    `Content-Type` = "application/json",
+    `Authorization` = paste("Bearer", chat_context$config$api_key)
+  )
+  
   full_content <- ""
-  in_reasoning_phase <- FALSE
-  in_content_phase <- FALSE
+  full_reasoning <- ""
+  current_state <- "none"
+  is_first <- TRUE
   
-  if (echo == "stream") {
-    print_header("用户问题", "❓", "blue")
-    print_box(user_content, border_color = "blue", width = 75)
-  }
+  # 标题已显示标志
+  reasoning_header_shown <- FALSE
+  content_header_shown <- FALSE
   
-  stream_callback <- function(chunk) {
-    text <- rawToChar(chunk)
-    lines <- strsplit(text, "\n")[[1]]
+  cli_process_start("🚀 连接中...")
+  
+  stream_cb <- function(chunk) {
+    if (is_first) {
+      cli_process_done()
+      is_first <<- FALSE
+    }
+    
+    # 多重编码安全转换
+    raw_text <- tryCatch({
+      txt <- rawToChar(chunk)
+      # 验证 UTF-8 合法性
+      if (validUTF8(txt)) {
+        txt
+      } else {
+        # 强制转换为 UTF-8
+        iconv(txt, to = "UTF-8", sub = "byte")
+      }
+    }, error = function(e) {
+      # 降级方案：只保留 ASCII 字符
+      rawToChar(chunk[chunk < 128])
+    })
+    
+    # 确保为 UTF-8
+    raw_text <- enc2utf8(raw_text)
+    
+    # 安全分割行
+    lines <- tryCatch({
+      strsplit(raw_text, "\n", fixed = TRUE)[[1]]
+    }, error = function(e) {
+      character(0)
+    })
     
     for (line in lines) {
       if (!startsWith(line, "data: ")) next
+      
       json_str <- sub("^data: ", "", line)
-      if (json_str == "[DONE]") {
-        if (echo == "stream") cat("\n")
-        return(TRUE)
-      }
+      json_str <- trimws(json_str)
+      
+      if (json_str == "" || json_str == "[DONE]") next
       
       tryCatch({
-        delta <- fromJSON(json_str, simplifyVector = FALSE)
-        if (!is.null(delta$choices) && length(delta$choices) > 0) {
-          choice <- delta$choices[[1]]
+        data <- jsonlite::fromJSON(json_str, simplifyVector = FALSE)
+        
+        if (!is.null(data$choices) && length(data$choices) > 0) {
+          delta <- data$choices[[1]]$delta
           
-          # 推理内容
-          if (show_reasoning && !is.null(choice$delta$reasoning_content)) {
-            reasoning_chunk <- choice$delta$reasoning_content
-            full_reasoning <<- paste0(full_reasoning, reasoning_chunk)
-            
-            if (!in_reasoning_phase && echo == "stream") {
-              cli_process_done() 
-              print_stream_title("推理过程", "💭", 70)
-              in_reasoning_phase <<- TRUE
+          # ===== 处理推理内容 =====
+          r_c <- delta$reasoning_content
+          if (!is.null(r_c) && !is.na(r_c[1]) && nchar(r_c) > 0) {
+            r_c <- safe_string(r_c)
+            if (!reasoning_header_shown && show_reasoning) {
+              if (content_header_shown) cat("\n")
+              msg_stream("AI Thinking", "💭")
+              reasoning_header_shown <<- TRUE
             }
-            if (echo == "stream") cat(yellow(reasoning_chunk))
+            current_state <<- "reasoning"
+            full_reasoning <<- paste0(full_reasoning, r_c)
+            if (show_reasoning) {
+              cat(yellow(r_c))
+            }
           }
           
-          # 回答内容
-          if (!is.null(choice$delta$content)) {
-            content_chunk <- choice$delta$content
-            full_content <<- paste0(full_content, content_chunk)
-            
-            if (!in_content_phase && echo == "stream") {
-              if (!in_reasoning_phase) cli_process_done()
-              if (in_reasoning_phase) cat("\n\n")
-              print_stream_title("AI 回答", "🤖", 70)
-              in_content_phase <<- TRUE
+          # ===== 处理正文内容 =====
+          c_c <- delta$content
+          if (!is.null(c_c) && !is.na(c_c[1]) && nchar(c_c) > 0) {
+            c_c <- safe_string(c_c)
+            if (!content_header_shown) {
+              if (reasoning_header_shown && show_reasoning) cat("\n\n")
+              msg_stream("AI Response", "🤖")
+              content_header_shown <<- TRUE
             }
-            if (echo == "stream") cat(green(content_chunk))
+            current_state <<- "content"
+            full_content <<- paste0(full_content, c_c)
+            cat(green(c_c))
           }
+          
           flush.console()
         }
-      }, error = function(e) {})
+      }, error = function(e) {
+        # 静默忽略单个数据块的解析错误
+      })
     }
     return(TRUE)
   }
   
-  response <- httr::POST(
-    url = base_url,
-    config = headers,
-    body = body_list,
-    encode = "json",
-    httr::write_stream(stream_callback)
-  )
-  
-  stop_for_status(response, task = "查询流式 API")
-  
-  result <- list(
-    choices = list(list(message = list(
-      reasoning_content = full_reasoning,
-      content = full_content
-    )))
-  )
-  
-  if (echo == "output") {
-    print_header("AI 回答", "💬", "green")
-    cat(full_content, "\n")
-  } else if (echo == "all") {
-    print_header("用户问题", "❓", "blue")
-    cat(user_content, "\n")
-    if (nchar(full_reasoning) > 0) {
-      print_header("推理过程", "💭", "yellow")
-      cat(full_reasoning, "\n")
-    }
-    print_header("AI 回答", "💬", "green")
-    cat(full_content, "\n")
-  }
-  
-  cat("\n")
-  cli_alert_success("{green('✓')} 响应完成！")
-  return(invisible(result))
-}
-
-
-# --- 5. 主程序执行逻辑 ---
-
-main <- function() {
-  # 欢迎横幅
-  cat("\n")
-  cat(cyan$bold(strrep("═", 80)), "\n")
-  cat(cyan$bold("    🤖 Starlight LLM 聊天客户端"), yellow$bold(" v1.1"), "\n")
-  cat(cyan$bold(strrep("═", 80)), "\n")
-  cat("\n")
-  
-  # 加载配置
-  cli_process_start("📁 加载配置文件 {.file .env}")
-  if (!file.exists(".env")) {
-    cli_process_failed()
-    cli_abort(c(
-      "x" = "配置文件 {.file .env} 未找到",
-      "i" = "请创建 {.file .env} 文件来配置 API 提供商"
-    ))
-  }
-  config <- yaml::read_yaml(".env")
-  cli_process_done()
-  
-  # 确定服务商
-  if (is.null(args$provider)) {
-    provider <- sample(names(config), 1)
-    cli_alert_info("🎲 随机选择服务商: {.strong {cyan(provider)}}")
-  } else if (args$provider %in% names(config)) {
-    provider <- args$provider
-    cli_alert_info("🎯 使用指定服务商: {.strong {cyan(provider)}}")
-  } else {
-    cli_abort("❌ 提供商 {.strong {args$provider}} 在配置中未定义")
-  }
-  
-  provider_config <- config[[provider]]
-  
-  # 确定模型
-  if (is.null(args$model)) {
-    model <- sample(provider_config$model, 1)
-    cli_alert_info("🎲 随机选择模型: {.strong {magenta(model)}}")
-  } else {
-    model <- args$model
-    cli_alert_info("🎯 使用指定模型: {.strong {magenta(model)}}")
-  }
-  
-  # 处理 System Prompt 显示文本 (防止过长)
-  sys_prompt_display <- args$system
-  if (nchar(sys_prompt_display) > 50) {
-    sys_prompt_display <- paste0(substr(sys_prompt_display, 1, 47), "...")
-  }
-  
-  # 配置摘要
-  cat("\n")
-  cli_h2("📋 配置摘要")
-  cat(blue("  ├─ 服务商: "), cyan$bold(provider), "\n", sep = "")
-  cat(blue("  ├─ 模型:   "), magenta$bold(model), "\n", sep = "")
-  cat(blue("  ├─ API:    "), silver(provider_config$baseurl), "\n", sep = "")
-  cat(blue("  ├─ System: "), silver$italic(sys_prompt_display), "\n", sep = "") # 显示 System Prompt
-  cat(blue("  └─ 推理:   "), 
-      if(args$show_reasoning) green("✓ 显示") else red("✗ 隐藏"), 
-      "\n", sep = "")
-  
-  # 准备问题
-  user_content <- args$question
-  
-  # 检查是否指定了文本文件参数 (!is.null)
-  if (!is.null(args$use_text)) {
-    cli_process_start(paste0("📖 正在加载上下文文件 {.file ", basename(args$use_text), "}"))
-    
-    if (file.exists(args$use_text)) {
-      # 1. 读取文件
-      # warn=FALSE 防止文件最后一行没有换行符时报警告
-      readme_content <- paste(readLines(args$use_text, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
-      
-      # 2. 拼接 Prompt
-      user_content <- paste(
-        "# 参考文档/上下文\n",
-        readme_content,
-        "\n\n# 用户问题\n",
-        args$question,
-        sep = ""
-      )
-      cli_process_done()
-      cli_alert_success("已成功加载上下文文件！")
-      
-    } else {
-      # 3. 文件不存在时的处理
-      cli_process_failed()
-      cli_alert_warning(paste0("⚠️  文件 {.file ", basename(args$use_text), "} 未找到，将忽略上下文，仅提交问题。"))
-    }
-  }
-  
-  # 开始对话
-  cat("\n")
   tryCatch({
-    cli_rule(left = cyan$bold("🚀 开始对话"), col = "cyan")
-  }, error = function(e){
-    cli_rule(left = cyan$bold("🚀 开始对话"))
-  })
-  cat("\n")
-  
-  tryCatch({
-    chat_openai_compatible(
-      base_url = provider_config$baseurl,
-      user_content = user_content,
-      system_prompt = args$system,    # 传入 System Prompt
-      api_key = provider_config$api_key,
-      model_name = model,
-      echo = "stream",
-      stream = TRUE,
-      show_reasoning = args$show_reasoning
+    POST(
+      url,
+      headers,
+      body = jsonlite::toJSON(body, auto_unbox = TRUE),
+      write_stream(stream_cb)
     )
   }, error = function(e) {
-    cat("\n")
-    tryCatch({
-      cli_rule(left = red$bold("❌ 发生错误"), col = "red")
-    }, error = function(e){
-      cli_rule(left = red$bold("❌ 发生错误"))
-    })
-    cat("\n")
-    cat(red("  ✖ 错误信息: "), conditionMessage(e), "\n", sep = "")
-    cat(silver("  ℹ 请检查网络连接和API配置\n"))
+    msg_error(paste("Stream Error:", e$message))
+    return(NULL)
   })
   
-  # 结束
   cat("\n")
-  tryCatch({
-    cli_rule(left = cyan$bold("✨ 对话结束"), col = "cyan")
-  }, error = function(e){
-    cli_rule(left = cyan$bold("✨ 对话结束"))
-  })
-  cat(silver("  感谢使用 Starlight LLM 聊天客户端！\n"))
-  cat("\n")
+  return(full_content)
 }
 
-# --- 6. 运行主函数 ---
-if (sys.nframe() == 0) {
-  main()
+# =========================================================================
+# 7. 指令系统（增强版）
+# =========================================================================
+
+handle_command <- function(input) {
+  parts <- strsplit(trimws(input), "\\s+")[[1]]
+  cmd <- parts[1]
+  args <- paste(parts[-1], collapse = " ")
+  
+  switch(
+    cmd,
+    
+    # --- 帮助信息 ---
+    "/help" = {
+      msg_header("可用指令列表", "📖")
+      cli_ul(c(
+        "=== 会话管理 ===",
+        "/newsession       - 创建新会话",
+        "/switch           - 切换到其他会话",
+        "/sessions         - 列出所有会话",
+        "/delete [file]    - 删除指定会话",
+        "/title [text]     - 手动设置会话标题",
+        "",
+        "=== 对话控制 ===",
+        "/history          - 查看对话历史",
+        "/clean            - 清空当前对话",
+        "/compress         - 压缩历史为摘要",
+        "",
+        "=== 系统配置 ===",
+        "/init             - 重新配置 API",
+        "/setmodel [m]     - 切换模型",
+        "/lsmodel          - 列出可用模型",
+        "/setmemory [t]    - 追加长期记忆",
+        "/addtext [f]      - 载入文件到上下文",
+        "/execute [cmd]    - 执行系统命令",
+        "/systemprompt     - 修改系统提示词",
+        "",
+        "=== 其他 ===",
+        "/help             - 显示此帮助",
+        "/quit, /exit      - 退出程序"
+      ))
+    },
+    
+    # --- 新建会话 ---
+    "/newsession" = {
+      msg_header("创建新会话", "🆕")
+      confirm <- read_console("确认创建新会话? 当前会话将保存 (y/N): ")
+      if (tolower(trimws(confirm)) == "y") {
+        save_session()
+        
+        # 重置上下文
+        chat_context$history <- list()
+        chat_context$compressed_summary <- ""
+        chat_context$full_history <- list()
+        
+        # 创建新会话文件
+        init_session_file(force_new = TRUE)
+        msg_success("新会话已创建")
+      } else {
+        msg_info("已取消")
+      }
+    },
+    
+    # --- 切换会话 ---
+    "/switch" = {
+      session_dir <- file.path(getwd(), "chat_logs")
+      if (!dir.exists(session_dir)) {
+        msg_warning("暂无会话记录")
+        return()
+      }
+      
+      files <- list.files(session_dir, pattern = "^chat_.*\\.json$", full.names = TRUE)
+      if (length(files) == 0) {
+        msg_warning("暂无会话记录")
+        return()
+      }
+      
+      msg_header("可切换的会话", "🔄")
+      
+      # 读取每个文件的标题
+      for (i in seq_along(files)) {
+        title <- tryCatch({
+          con <- file(files[i], "r", encoding = "UTF-8")
+          data <- jsonlite::fromJSON(readLines(con, warn = FALSE), simplifyVector = FALSE)
+          close(con)
+          data$title %||% "未命名对话"
+        }, error = function(e) "未命名对话")
+        
+        info <- file.info(files[i])
+        current_marker <- if (files[i] == chat_context$session_file) green(" ← 当前") else ""
+        
+        cat(cyan(sprintf("  [%d]", i)), 
+            yellow$bold(title), 
+            current_marker,
+            "\n",
+            silver(sprintf("      最后修改: %s", format(info$mtime, "%Y-%m-%d %H:%M"))), 
+            "\n")
+      }
+      
+      choice <- readline("\n选择会话编号 (回车取消): ")
+      if (nchar(trimws(choice)) > 0) {
+        idx <- as.integer(choice)
+        if (!is.na(idx) && idx >= 1 && idx <= length(files)) {
+          if (files[idx] == chat_context$session_file) {
+            msg_info("已经在当前会话中")
+          } else {
+            save_session()
+            chat_context$session_file <- files[idx]
+            init_session_file(force_new = FALSE)
+          }
+        } else {
+          msg_warning("无效的选择")
+        }
+      }
+    },
+    
+    # --- 删除会话 ---
+    "/delete" = {
+      if (nchar(args) == 0) {
+        msg_warning("用法: /delete <会话文件名>")
+        return()
+      }
+      
+      session_dir <- file.path(getwd(), "chat_logs")
+      target_file <- file.path(session_dir, args)
+      
+      if (!file.exists(target_file)) {
+        msg_error("会话文件不存在")
+        return()
+      }
+      
+      if (target_file == chat_context$session_file) {
+        msg_error("不能删除当前活动会话")
+        return()
+      }
+      
+      confirm <- readline(paste("确认删除", args, "? (y/N): "))
+      if (tolower(trimws(confirm)) == "y") {
+        file.remove(target_file)
+        msg_success("会话已删除")
+      }
+    },
+    
+    # --- 手动设置标题 ---
+    "/title" = {
+      if (nchar(args) == 0) {
+        msg_info(paste("当前标题:", chat_context$session_title))
+        new_title <- readline("输入新标题 (回车取消): ")
+        if (nchar(trimws(new_title)) > 0) {
+          chat_context$session_title <- trimws(new_title)
+          save_session()
+          msg_success(paste("标题已更新:", chat_context$session_title))
+        }
+      } else {
+        chat_context$session_title <- args
+        save_session()
+        msg_success(paste("标题已更新:", args))
+      }
+    },
+    
+    # --- 清空历史 ---
+    "/clean" = {
+      chat_context$history <- list()
+      chat_context$compressed_summary <- ""
+      chat_context$full_history <- list()
+      save_session()
+      msg_success("对话历史已清空")
+    },
+    
+    # --- 初始化配置 ---
+    "/init" = {
+      msg_header("初始化配置", "⚙️")
+      u <- readline(paste0("Endpoint [", chat_context$config$baseurl, "]: "))
+      if (nchar(u) > 0) chat_context$config$baseurl <- u
+      
+      k <- readline(paste0("API Key [***]: "))
+      if (nchar(k) > 0) chat_context$config$api_key <- k
+      
+      m <- readline(paste0("Model [", chat_context$current_model, "]: "))
+      if (nchar(m) > 0) chat_context$current_model <- m
+      
+      msg_success("配置已更新，正在验证模型列表...")
+      fetch_remote_models()
+    },
+    
+    # --- 切换模型 ---
+    "/setmodel" = {
+      if (nchar(args) == 0) {
+        msg_info(paste("当前模型:", chat_context$current_model))
+      } else {
+        chat_context$current_model <- args
+        msg_success(paste("已切换至:", args))
+        save_session()
+      }
+    },
+    
+    # --- 列出模型 ---
+    "/lsmodel" = {
+      fetch_remote_models()
+    },
+    
+    # --- 设置记忆 ---
+    "/setmemory" = {
+      chat_context$memory_slot <- paste(chat_context$memory_slot, args, sep = "\n")
+      save_session()
+      msg_success("长期记忆已追加")
+    },
+    
+    # --- 修改系统提示词 ---
+    "/systemprompt" = {
+      msg_header("修改系统提示词", "⚙️")
+      
+      # 显示当前系统提示词
+      cat(magenta$bold("【当前系统提示词】\n"))
+      cat(silver(chat_context$base_system), "\n\n")
+      
+      # 输入新提示词
+      cat(cyan("请输入新的系统提示词 (支持多行，输入空行结束):\n"))
+      new_prompt <- read_console("> ")  # ← 修复：添加空字符串参数
+      lines <- c(new_prompt)
+      
+      # 支持多行输入
+      repeat {
+        line <- read_console("> ")  # ← 修复：添加空字符串参数
+        if (is.null(line) || nchar(trimws(line)) == 0) break
+        lines <- c(lines, line)
+      }
+      
+      # 更新系统提示词
+      final_prompt <- paste(lines, collapse = "\n")
+      if (nchar(trimws(final_prompt)) > 0) {
+        chat_context$base_system <- safe_string(final_prompt)
+        save_session()
+        msg_success("系统提示词已更新")
+        cat(silver(paste("\n新提示词:\n", chat_context$base_system, "\n\n")))
+      } else {
+        msg_warning("输入为空，已取消")
+      }
+    },
+    
+    # --- 载入文件 ---
+    "/addtext" = {
+      if (!file.exists(args)) {
+        msg_error("文件不存在")
+      } else {
+        content <- paste(readLines(args, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+        content <- safe_string(content)
+        chat_context$history <- c(
+          chat_context$history,
+          list(
+            list(role = "user", content = paste("【文件内容】\n", content)),
+            list(role = "assistant", content = "已收到并理解文件内容")
+          )
+        )
+        save_session()
+        msg_success(paste("文件已载入:", args))
+      }
+    },
+    
+    # --- 查看历史（增强版：区分压缩前后） ---
+    "/history" = {
+      msg_header("对话历史记录", "📜")
+      
+      # 1. 显示压缩摘要（如果存在）
+      if (nchar(chat_context$compressed_summary) > 0) {
+        cat(cyan$bold("【压缩摘要】\n"))
+        cat(silver(chat_context$compressed_summary), "\n\n")
+        
+        # 2. 显示压缩前的完整历史
+        if (length(chat_context$full_history) > 0) {
+          cat(magenta$bold("【压缩前完整历史】\n\n"))
+          for (i in seq_along(chat_context$full_history)) {
+            msg <- chat_context$full_history[[i]]
+            role_label <- switch(
+              msg$role,
+              "user" = blue$bold("👤 User"),
+              "assistant" = green$bold("🤖 Assistant"),
+              "system" = magenta$bold("⚙️ System"),
+              cyan$bold(paste("📝", msg$role))
+            )
+            cat(role_label)
+            if (!is.null(msg$timestamp)) {
+              cat(silver(paste(" [", msg$timestamp, "]")))
+            }
+            cat("\n")
+            cat(silver(safe_string(msg$content)), "\n\n")
+          }
+        }
+        
+        # 3. 显示压缩后的新对话
+        if (length(chat_context$history) > 0) {
+          cat(yellow$bold("【压缩后新对话】\n\n"))
+          for (i in seq_along(chat_context$history)) {
+            msg <- chat_context$history[[i]]
+            role_label <- switch(
+              msg$role,
+              "user" = blue$bold("👤 User"),
+              "assistant" = green$bold("🤖 Assistant"),
+              cyan$bold(paste("📝", msg$role))
+            )
+            cat(role_label)
+            if (!is.null(msg$timestamp)) {
+              cat(silver(paste(" [", msg$timestamp, "]")))
+            }
+            cat("\n")
+            cat(silver(safe_string(msg$content)), "\n\n")
+          }
+        }
+      } else {
+        # 未压缩：显示当前历史
+        if (length(chat_context$history) == 0) {
+          msg_info("历史记录为空")
+        } else {
+          for (i in seq_along(chat_context$history)) {
+            msg <- chat_context$history[[i]]
+            role_label <- switch(
+              msg$role,
+              "user" = blue$bold("👤 User"),
+              "assistant" = green$bold("🤖 Assistant"),
+              "system" = magenta$bold("⚙️ System"),
+              cyan$bold(paste("📝", msg$role))
+            )
+            cat(role_label)
+            if (!is.null(msg$timestamp)) {
+              cat(silver(paste(" [", msg$timestamp, "]")))
+            }
+            cat("\n")
+            cat(silver(safe_string(msg$content)), "\n\n")
+          }
+        }
+      }
+    },
+    
+    # --- 压缩历史（增强版：保留完整记录） ---
+    "/compress" = {
+      if (length(chat_context$history) == 0) {
+        msg_warning("历史为空，无需压缩")
+        return()
+      }
+      
+      cli_process_start("正在压缩历史对话...")
+      
+      # 生成摘要
+      summary <- simple_chat_request(c(
+        chat_context$history,
+        list(list(
+          role = "user",
+          content = "请用300字以内简要总结上述对话的核心内容和关键信息，保留重要细节。用中文回答。"
+        ))
+      ))
+      
+      cli_process_done()
+      
+      if (!is.null(summary) && nchar(summary) > 0) {
+        # 保存压缩前的完整历史
+        chat_context$full_history <- chat_context$history
+        
+        # 保存摘要
+        chat_context$compressed_summary <- summary
+        
+        # 清空当前历史（准备新对话）
+        chat_context$history <- list()
+        
+        # 保存到文件
+        save_session()
+        
+        msg_success("历史已压缩为摘要，后续对话将基于摘要进行")
+        cat(cyan("\n【摘要内容】\n"))
+        cat(silver(summary), "\n\n")
+        msg_info("使用 /history 可查看完整压缩前后的记录")
+      } else {
+        msg_error("压缩失败，请检查网络连接")
+      }
+    },
+    
+    # --- 列出所有会话 ---
+    "/sessions" = {
+      session_dir <- file.path(getwd(), "chat_logs")
+      if (!dir.exists(session_dir)) {
+        msg_warning("暂无会话记录")
+        return()
+      }
+      
+      files <- list.files(session_dir, pattern = "^chat_.*\\.json$", full.names = TRUE)
+      if (length(files) == 0) {
+        msg_warning("暂无会话记录")
+      } else {
+        msg_header("历史会话列表", "📁")
+        
+        for (f in files) {
+          # 读取标题
+          title <- tryCatch({
+            con <- file(f, "r", encoding = "UTF-8")
+            data <- jsonlite::fromJSON(readLines(con, warn = FALSE), simplifyVector = FALSE)
+            close(con)
+            data$title %||% "未命名对话"
+          }, error = function(e) "未命名对话")
+          
+          info <- file.info(f)
+          current_marker <- if (f == chat_context$session_file) green(" ← 当前") else ""
+          
+          cat(cyan("  •"), 
+              yellow$bold(title), 
+              current_marker,
+              "\n",
+              silver(sprintf("    文件: %s", basename(f))),
+              "\n",
+              silver(sprintf("    修改: %s", format(info$mtime, "%Y-%m-%d %H:%M"))),
+              "\n\n")
+        }
+      }
+    },
+    
+    # --- 执行系统命令 ---
+    "/execute" = {
+      tryCatch({
+        system(args)
+        msg_success("命令执行完成")
+      }, error = function(e) {
+        msg_error(paste("执行失败:", e$message))
+      })
+    },
+    
+    # --- 退出 ---
+    "/quit" = {
+      msg_success("会话已保存，再见!")
+      quit(save = "no")
+    },
+    
+    "/exit" = {
+      msg_success("会话已保存，再见!")
+      quit(save = "no")
+    },
+    
+    # --- 未知指令 ---
+    msg_warning("未知指令，输入 /help 查看帮助")
+  )
 }
+
+# =========================================================================
+# 8. 主程序
+# =========================================================================
+
+main <- function() {
+  option_list <- list(
+    make_option(c("-p", "--provider"), type = "character"),
+    make_option(c("-m", "--model"), type = "character"),
+    make_option(c("-S", "--system"), type = "character", default = "你是一个智能助手。"),
+    make_option(c("-s", "--show_reasoning"), action = "store_true", default = TRUE),
+    make_option(c("-q", "--question"), type = "character"),
+    make_option(c("-r", "--resume"), action = "store_true", default = TRUE)  # 新增：是否恢复会话
+  )
+  
+  args <- parse_args(OptionParser(option_list = option_list))
+  
+  # 启动标题
+  cli_rule(left = cyan$bold("🤖 Starlight CLI v1.5.0"), right = "Smart Session Manager")
+  
+  # 加载配置
+  if (!file.exists(".env")) {
+    msg_warning(".env 配置文件不存在")
+    msg_info("请使用 /init 进行初始配置")
+    chat_context$config <- list(baseurl = "", api_key = "")
+  } else {
+    full_config <- yaml::read_yaml(".env")
+    prov <- if (!is.null(args$provider)) args$provider else sample(names(full_config), 1)
+    chat_context$config <- full_config[[prov]]
+    chat_context$current_model <- if (!is.null(args$model)) {
+      args$model
+    } else {
+      sample(chat_context$config$model, 1)
+    }
+    
+    msg_info(paste("Provider:", prov))
+    msg_info(paste("Model:", chat_context$current_model))
+    
+    # 启动时自动列出模型
+    fetch_remote_models(silent_on_error = TRUE)
+  }
+  
+  chat_context$base_system <- args$system
+  
+  # 初始化会话文件（默认新建会话）
+  init_session_file(force_new = args$resume)
+  
+  # 单次问答模式
+  if (!is.null(args$question)) {
+    reply <- stream_chat(build_messages(args$question), args$show_reasoning)
+    if (!is.null(reply) && nchar(reply) > 0) {
+      add_conversation(args$question, reply)
+    }
+    return()
+  }
+  
+  # 交互模式提示
+  msg_success("系统就绪，输入 /help 查看可用指令")
+  
+  # 主循环
+  while (TRUE) {
+    input <- read_console(crayon::blue$bold("\n💬 You > "))
+    
+    if (is.null(input)) break
+    if (length(input) == 0 || nchar(trimws(input)) == 0) next
+    
+    if (startsWith(input, "/")) {
+      handle_command(input)
+    } else {
+      reply <- stream_chat(build_messages(input), args$show_reasoning)
+      if (!is.null(reply) && nchar(reply) > 0) {
+        add_conversation(input, reply)
+      }
+    }
+  }
+}
+
+# 程序入口
+if (sys.nframe() == 0) main()
