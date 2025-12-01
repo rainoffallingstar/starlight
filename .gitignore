@@ -52,4 +52,4 @@ rsconnect/
 .env
 
 # chat_log
-chat_log/*.json
+chat_logs/*.json

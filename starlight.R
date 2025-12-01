@@ -173,7 +173,7 @@ generate_session_title <- function() {
 }
 
 # 获取或创建会话文件
-init_session_file <- function(force_new = FALSE) {
+init_session_file <- function(force_new = FALSE,json = NULL) {
   session_dir <- file.path(getwd(), "chat_logs")
   if (!dir.exists(session_dir)) {
     dir.create(session_dir, recursive = TRUE)
@@ -189,7 +189,11 @@ init_session_file <- function(force_new = FALSE) {
     
     if (length(existing_files) > 0) {
       # 按修改时间排序，取最新的
-      latest_file <- existing_files[order(file.mtime(existing_files), decreasing = TRUE)[1]]
+      if (!is.null(json) && file.exists(json)){
+        latest_file <- json
+      }else{
+        latest_file <- existing_files[order(file.mtime(existing_files), decreasing = TRUE)[1]]
+      }
       
       # 尝试加载现有会话
       tryCatch({
@@ -675,7 +679,7 @@ handle_command <- function(input) {
             "\n")
       }
       
-      choice <- readline("\n选择会话编号 (回车取消): ")
+      choice <- read_console("\n选择会话编号 (回车取消): ")
       if (nchar(trimws(choice)) > 0) {
         idx <- as.integer(choice)
         if (!is.na(idx) && idx >= 1 && idx <= length(files)) {
@@ -684,7 +688,7 @@ handle_command <- function(input) {
           } else {
             save_session()
             chat_context$session_file <- files[idx]
-            init_session_file(force_new = FALSE)
+            init_session_file(force_new = FALSE,json = files[idx])
           }
         } else {
           msg_warning("无效的选择")
@@ -712,7 +716,7 @@ handle_command <- function(input) {
         return()
       }
       
-      confirm <- readline(paste("确认删除", args, "? (y/N): "))
+      confirm <- read_console(paste("确认删除", args, "? (y/N): "))
       if (tolower(trimws(confirm)) == "y") {
         file.remove(target_file)
         msg_success("会话已删除")
@@ -723,7 +727,7 @@ handle_command <- function(input) {
     "/title" = {
       if (nchar(args) == 0) {
         msg_info(paste("当前标题:", chat_context$session_title))
-        new_title <- readline("输入新标题 (回车取消): ")
+        new_title <- read_console("输入新标题 (回车取消): ")
         if (nchar(trimws(new_title)) > 0) {
           chat_context$session_title <- trimws(new_title)
           save_session()
@@ -748,13 +752,13 @@ handle_command <- function(input) {
     # --- 初始化配置 ---
     "/init" = {
       msg_header("初始化配置", "⚙️")
-      u <- readline(paste0("Endpoint [", chat_context$config$baseurl, "]: "))
+      u <- read_console(paste0("Endpoint [", chat_context$config$baseurl, "]: "))
       if (nchar(u) > 0) chat_context$config$baseurl <- u
       
-      k <- readline(paste0("API Key [***]: "))
+      k <- read_console(paste0("API Key [***]: "))
       if (nchar(k) > 0) chat_context$config$api_key <- k
       
-      m <- readline(paste0("Model [", chat_context$current_model, "]: "))
+      m <- read_console(paste0("Model [", chat_context$current_model, "]: "))
       if (nchar(m) > 0) chat_context$current_model <- m
       
       msg_success("配置已更新，正在验证模型列表...")
