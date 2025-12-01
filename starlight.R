@@ -852,28 +852,88 @@ handle_command <- function(input) {
       cat(magenta$bold("【当前系统提示词】\n"))
       cat(silver(chat_context$base_system), "\n\n")
       
-      # 输入新提示词
-      cat(cyan("请输入新的系统提示词 (支持多行，输入空行结束):\n"))
-      new_prompt <- read_console("> ")  # ← 修复：添加空字符串参数
-      lines <- c(new_prompt)
+      # 选择输入方式
+      cat(cyan("选择输入方式:\n"))
+      cat("  1. 从文件导入\n")
+      cat("  2. 终端输入 (多行)\n")
+      cat("  3. 取消\n\n")
       
-      # 支持多行输入
-      repeat {
-        line <- read_console("> ")  # ← 修复：添加空字符串参数
-        if (is.null(line) || nchar(trimws(line)) == 0) break
-        lines <- c(lines, line)
-      }
+      choice <- read_console("请选择 (1-3): ")
       
-      # 更新系统提示词
-      final_prompt <- paste(lines, collapse = "\n")
-      if (nchar(trimws(final_prompt)) > 0) {
-        chat_context$base_system <- safe_string(final_prompt)
-        save_session()
-        msg_success("系统提示词已更新")
-        cat(silver(paste("\n新提示词:\n", chat_context$base_system, "\n\n")))
-      } else {
-        msg_warning("输入为空，已取消")
-      }
+      switch(
+        trimws(choice),
+        "1" = {
+          # 从文件导入
+          filepath <- read_console("输入文件路径: ")
+          
+          if (is.null(filepath) || nchar(trimws(filepath)) == 0) {
+            msg_info("已取消")
+            return()
+          }
+          
+          filepath <- trimws(filepath)
+          
+          if (!file.exists(filepath)) {
+            msg_error("文件不存在")
+            return()
+          }
+          
+          tryCatch({
+            content <- paste(
+              readLines(filepath, warn = FALSE, encoding = "UTF-8"), 
+              collapse = "\n"
+            )
+            content <- safe_string(content)
+            
+            if (nchar(trimws(content)) > 0) {
+              chat_context$base_system <- content
+              save_session()
+              msg_success(paste("已从文件导入:", filepath))
+              cat(silver(paste("\n新提示词:\n", chat_context$base_system, "\n\n")))
+            } else {
+              msg_warning("文件内容为空")
+            }
+          }, error = function(e) {
+            msg_error(paste("读取文件失败:", e$message))
+          })
+        },
+        "2" = {
+          # 终端多行输入
+          cat(cyan("\n请输入新的系统提示词 (输入空行结束):\n"))
+          new_prompt <- read_console("> ")
+          
+          if (is.null(new_prompt)) {
+            msg_info("已取消")
+            return()
+          }
+          
+          lines <- c(new_prompt)
+          
+          # 支持多行输入
+          repeat {
+            line <- read_console("> ")
+            if (is.null(line) || nchar(trimws(line)) == 0) break
+            lines <- c(lines, line)
+          }
+          
+          # 更新系统提示词
+          final_prompt <- paste(lines, collapse = "\n")
+          if (nchar(trimws(final_prompt)) > 0) {
+            chat_context$base_system <- safe_string(final_prompt)
+            save_session()
+            msg_success("系统提示词已更新")
+            cat(silver(paste("\n新提示词:\n", chat_context$base_system, "\n\n")))
+          } else {
+            msg_warning("输入为空，已取消")
+          }
+        },
+        "3" = {
+          msg_info("已取消操作")
+        },
+        {
+          msg_warning("无效选择")
+        }
+      )
     },
     
     # --- 载入文件 ---

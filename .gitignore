@@ -53,3 +53,6 @@ rsconnect/
 
 # chat_log
 chat_logs/*.json
+
+# selfuse prompts
+prompts/*.txt
