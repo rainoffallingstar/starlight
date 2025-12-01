@@ -613,6 +613,7 @@ handle_command <- function(input) {
         "/setmodel [m]     - 切换模型",
         "/lsmodel          - 列出可用模型",
         "/setmemory [t]    - 追加长期记忆",
+        "/delmemory        - 删除指定记忆",  # ← 新增
         "/addtext [f]      - 载入文件到上下文",
         "/execute [cmd]    - 执行系统命令",
         "/systemprompt     - 修改系统提示词",
@@ -786,6 +787,61 @@ handle_command <- function(input) {
       chat_context$memory_slot <- paste(chat_context$memory_slot, args, sep = "\n")
       save_session()
       msg_success("长期记忆已追加")
+    },
+    "/delmemory" = {
+      if (nchar(trimws(chat_context$memory_slot)) == 0) {
+        msg_warning("当前无长期记忆")
+        return()
+      }
+      
+      msg_header("删除记忆", "🗑️")
+      
+      # 按行分割记忆
+      memory_lines <- strsplit(chat_context$memory_slot, "\n")[[1]]
+      memory_lines <- memory_lines[nchar(trimws(memory_lines)) > 0]  # 过滤空行
+      
+      if (length(memory_lines) == 0) {
+        msg_warning("当前无有效记忆")
+        return()
+      }
+      
+      # 显示所有记忆条目
+      cat(magenta$bold("【当前记忆列表】\n"))
+      for (i in seq_along(memory_lines)) {
+        cat(cyan(sprintf("  [%d]", i)), silver(memory_lines[i]), "\n")
+      }
+      cat("\n")
+      
+      # 选择要删除的记忆
+      choice <- read_console("输入要删除的记忆编号 (回车取消): ")
+      
+      if (is.null(choice) || nchar(trimws(choice)) == 0) {
+        msg_info("已取消")
+        return()
+      }
+      
+      idx <- as.integer(choice)
+      if (is.na(idx) || idx < 1 || idx > length(memory_lines)) {
+        msg_warning("无效的编号")
+        return()
+      }
+      
+      # 删除指定记忆
+      deleted_item <- memory_lines[idx]
+      memory_lines <- memory_lines[-idx]
+      
+      # 更新记忆槽
+      chat_context$memory_slot <- paste(memory_lines, collapse = "\n")
+      save_session()
+      
+      msg_success(paste("已删除:", deleted_item))
+      
+      # 显示剩余记忆
+      if (length(memory_lines) > 0) {
+        cat(silver(paste("\n剩余记忆:\n", chat_context$memory_slot, "\n\n")))
+      } else {
+        msg_info("所有记忆已清空")
+      }
     },
     
     # --- 修改系统提示词 ---

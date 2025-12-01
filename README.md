@@ -93,7 +93,7 @@ chmod +x starlight.R
 ### 3. 命令行参数 / Arguments
 
 | 参数 / Flag | 全称 / Long Flag | 描述 / Description |
-|:---|:---|:---|
+|:-----------------------|:-----------------------|:-----------------------|
 | `-p` | `--provider` | 选择 `.env` 中的提供商配置 / Select provider from `.env` |
 | `-m` | `--model` | 指定使用的模型名称 / Specify model name |
 | `-S` | `--system` | 设置系统提示词 (System Prompt) / Set System Prompt |
@@ -122,6 +122,7 @@ chmod +x starlight.R
 -   `/compress`: 压缩历史记录为摘要 / Compress history into a summary.
 -   `/history`: 查看完整对话记录 (含压缩前历史) / View full history (including pre-compressed).
 -   `/setmemory [text]`: 添加长期记忆 / Append to long-term memory.
+-   `/delmemory` :删除长期记忆 / Delete some long-term memory items.
 -   `/addtext [path]`: 读取文件内容并发送 / Read and send file content.
 
 ### ⚙️ 系统设置 / System Settings
