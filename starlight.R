@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # =========================================================================
 #           🤖 星光通用大模型聊天客户端 (Starlight CLI)
-#          Version: 2.4.0 (RAG 完整版)
+#          Version: 2.5.0 (RAG + Image Generation 完整版)
 # =========================================================================
 
 # 强制设置 UTF-8 编码
@@ -43,6 +43,7 @@ chat_context$memory_slot <- ""              # 长期记忆
 chat_context$base_system <- ""              # 基础人设
 chat_context$config <- NULL                 # 当前配置
 chat_context$embedding_config <- NULL       # Embedding 配置
+chat_context$imagegen_config <- NULL        # 🆕 图片生成配置
 chat_context$current_model <- ""            # 当前模型
 chat_context$current_provider <- ""         # 当前渠道
 chat_context$compressed_summary <- ""       # 压缩后的摘要
@@ -240,8 +241,8 @@ download_image <- function(image_url, gen_dir = NULL) {
       
       msg_success(paste("✓ Base64图片已保存:", filename))
       msg_debug(paste("  路径:", filepath))
-      return(filepath)
       
+      return(filepath)
     } else {
       # 网络图片
       msg_debug(paste("下载网络图片:", image_url))
@@ -265,6 +266,7 @@ download_image <- function(image_url, gen_dir = NULL) {
       msg_success(paste("✓ 网络图片已下载:", filename))
       msg_debug(paste("  URL:", image_url))
       msg_debug(paste("  路径:", filepath))
+      
       return(filepath)
     }
   }, error = function(e) {
@@ -329,6 +331,7 @@ render_image <- function(image_url_or_path) {
         cat("│ ", paste(row_chars, collapse = ""), "\n")
       }
       cat(cyan$bold("└"), strrep("─", max_width + 2), cyan$bold("┘\n\n"))
+      
       return(TRUE)
     }, error = function(e) {
       msg_debug(paste("imager渲染失败:", e$message))
@@ -481,7 +484,6 @@ call_embedding_api <- function(texts) {
     }
     
     return(embeddings)
-    
   }, error = function(e) {
     msg_error(paste("Embedding API 调用失败:", e$message))
     return(NULL)
@@ -544,7 +546,7 @@ chunk_text <- function(text, chunk_size = 500, overlap = 50, max_tokens = 6000) 
     } else {
       if (nchar(current_chunk) > 0) {
         chunks <- append(chunks, list(trimws(current_chunk)))
-        msg_debug(paste("分块", length(chunks), ":", estimate_tokens(current_chunk), "tokens,", 
+        msg_debug(paste("分块", length(chunks), ":", estimate_tokens(current_chunk), "tokens,",
                         nchar(current_chunk), "字符"))
       }
       
@@ -561,6 +563,7 @@ chunk_text <- function(text, chunk_size = 500, overlap = 50, max_tokens = 6000) 
       # 检查单个句子是否过长
       if (estimate_tokens(current_chunk) > max_tokens) {
         msg_warning(paste("单个句子过长 (", nchar(current_chunk), "字符), 强制截断"))
+        
         # 强制按字符截断
         max_chars <- max_tokens * 1.5  # 安全边界
         while (nchar(current_chunk) > max_chars) {
@@ -575,7 +578,7 @@ chunk_text <- function(text, chunk_size = 500, overlap = 50, max_tokens = 6000) 
   
   if (nchar(trimws(current_chunk)) > 0) {
     chunks <- append(chunks, list(trimws(current_chunk)))
-    msg_debug(paste("最后分块:", estimate_tokens(current_chunk), "tokens,", 
+    msg_debug(paste("最后分块:", estimate_tokens(current_chunk), "tokens,",
                     nchar(current_chunk), "字符"))
   }
   
@@ -584,7 +587,6 @@ chunk_text <- function(text, chunk_size = 500, overlap = 50, max_tokens = 6000) 
   for (i in seq_along(chunks)) {
     chunk_tokens <- estimate_tokens(chunks[[i]])
     chunk_chars <- nchar(chunks[[i]])
-    
     msg_debug(paste("分块", i, ":", chunk_tokens, "tokens,", chunk_chars, "字符"))
     
     if (chunk_tokens > max_tokens) {
@@ -597,7 +599,6 @@ chunk_text <- function(text, chunk_size = 500, overlap = 50, max_tokens = 6000) 
   }
   
   msg_debug(paste("分块完成，共", length(chunks), "块"))
-  
   return(chunks)
 }
 
@@ -650,7 +651,6 @@ save_pdf_vectors <- function(filename, chunks, embeddings) {
     msg_debug(paste("  向量维度:", length(embeddings[[1]])))
     
     return(TRUE)
-    
   }, error = function(e) {
     msg_error(paste("保存向量失败:", e$message))
     return(FALSE)
@@ -697,13 +697,12 @@ cosine_similarity <- function(vec1, vec2) {
     similarity <- max(-1, min(1, similarity))
     
     return(similarity)
-    
   }, error = function(e) {
     msg_warning(paste("相似度计算错误:", e$message))
     return(0)
   })
 }
-# 从会话中检索相关 PDF 内容（增强版 - 错误处理）
+
 # 从会话中检索相关 PDF 内容（增强版 - 错误处理）
 retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
   # 检查是否有 PDF 向量数据
@@ -749,7 +748,6 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
     
     for (pdf_id in names(session_data$pdf_vectors)) {
       pdf_data <- session_data$pdf_vectors[[pdf_id]]
-      
       msg_debug(paste("检索 PDF:", pdf_data$filename, "-", pdf_data$chunk_count, "个分块"))
       
       # 验证数据结构
@@ -787,7 +785,6 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
           
           # 计算相似度
           similarity <- cosine_similarity(query_vec, chunk_embedding)
-          
           msg_debug(sprintf("分块 %d 相似度: %.4f", i, similarity))
           
           all_results <- append(all_results, list(list(
@@ -797,7 +794,6 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
             chunk_text = chunk_text,
             similarity = similarity
           )))
-          
         }, error = function(e) {
           msg_debug(paste("处理分块", i, "时出错:", e$message))
         })
@@ -818,6 +814,7 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
     
     # 过滤掉无效值
     valid_indices <- which(!is.na(similarities) & !is.nan(similarities))
+    
     if (length(valid_indices) == 0) {
       msg_debug("所有相似度计算结果无效")
       return(NULL)
@@ -840,16 +837,16 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
     
     # 5. 构建上下文文本
     context_parts <- list()
-    
     msg_debug("=== 检索结果 ===")
+    
     for (i in seq_along(top_results)) {
       result <- top_results[[i]]
-      msg_debug(sprintf("[%d] 文件: %s | 分块: %d | 相似度: %.4f", 
+      msg_debug(sprintf("[%d] 文件: %s | 分块: %d | 相似度: %.4f",
                         i, result$filename, result$chunk_index, result$similarity))
       msg_debug(paste("  内容预览:", substr(result$chunk_text, 1, 100), "..."))
       
       context_parts <- append(context_parts, paste0(
-        "【来源: ", result$filename, " - 片段 ", result$chunk_index, " | 相关度: ", 
+        "【来源: ", result$filename, " - 片段 ", result$chunk_index, " | 相关度: ",
         sprintf("%.1f%%", result$similarity * 100), "】\n",
         result$chunk_text
       ))
@@ -860,7 +857,6 @@ retrieve_pdf_context <- function(query, top_k = 3, similarity_threshold = 0.3) {
     msg_success(paste("✓ 检索到", length(top_results), "个相关片段"))
     
     return(context_text)
-    
   }, error = function(e) {
     msg_warning(paste("PDF 内容检索失败:", e$message))
     msg_debug(paste("完整错误:", toString(e)))
@@ -882,11 +878,11 @@ generate_session_title <- function() {
   title_model <- NULL
   
   # 1. 优先使用渠道配置的 title_model
-  if (!is.null(chat_context$config$title_model) && 
+  if (!is.null(chat_context$config$title_model) &&
       nchar(trimws(chat_context$config$title_model)) > 0) {
     title_model <- chat_context$config$title_model
     msg_debug(paste("使用渠道配置的标题模型:", title_model))
-  } 
+  }
   # 2. 回退到当前对话模型
   else {
     title_model <- chat_context$current_model
@@ -895,6 +891,7 @@ generate_session_title <- function() {
   
   # 构建标题生成请求
   sample_history <- head(chat_context$history, 6)
+  
   title_messages <- c(
     list(list(
       role = "system",
@@ -917,6 +914,7 @@ generate_session_title <- function() {
   
   # 恢复原模型
   chat_context$current_model <- old_model
+  
   cli_process_done()
   
   if (!is.null(title) && nchar(title) > 0) {
@@ -1030,6 +1028,7 @@ init_session_file <- function(force_new = FALSE, json = NULL) {
   
   save_session(session_data)
   msg_info(paste("新会话:", basename(session_file)))
+  
   return(session_file)
 }
 
@@ -1066,6 +1065,7 @@ save_session <- function(session_data = NULL) {
         con <- file(chat_context$session_file, "r", encoding = "UTF-8")
         existing <- jsonlite::fromJSON(readLines(con, warn = FALSE), simplifyVector = FALSE)
         close(con)
+        
         if (!is.null(existing$pdf_vectors)) {
           session_data$pdf_vectors <- existing$pdf_vectors
         }
@@ -1098,11 +1098,13 @@ add_conversation <- function(user_input, assistant_reply, images = NULL) {
   
   # 构建用户消息内容
   user_content <- user_input
+  
   if (!is.null(images) && length(images) > 0) {
     # 如果有图片,使用多部分内容格式
     user_content <- list(
       list(type = "text", text = user_input)
     )
+    
     # 添加图片信息摘要(不保存完整 Base64)
     for (i in seq_along(images)) {
       img_url <- images[[i]]$image_url$url
@@ -1246,6 +1248,7 @@ build_messages <- function(user_input = NULL, images = NULL) {
         role = "user",
         content = content_parts
       )
+      
       msgs <- append(msgs, list(new_msg))
     } else {
       # 无图片：使用简单字符串格式
@@ -1297,10 +1300,12 @@ fetch_remote_models <- function(silent_on_error = FALSE) {
     
     if (status_code(resp) == 200) {
       data <- content(resp, as = "parsed")
+      
       if (!is.null(data$data)) {
         model_ids <- sapply(data$data, function(x) x$id)
         
         msg_header("可用模型列表", "📦")
+        
         # 高亮当前模型
         for (mid in model_ids) {
           if (mid == chat_context$current_model) {
@@ -1310,6 +1315,7 @@ fetch_remote_models <- function(silent_on_error = FALSE) {
           }
         }
         cat("\n")
+        
         return(invisible(model_ids))
       } else {
         if (!silent_on_error) msg_warning("返回格式不标准,无法解析模型列表")
@@ -1376,6 +1382,7 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
     for (i in seq_along(messages)) {
       msg <- messages[[i]]
       cat(magenta$bold(paste("消息", i, "- 角色:", msg$role)), "\n")
+      
       if (is.list(msg$content)) {
         cat(silver("  内容类型: 多部分 ("), length(msg$content), "个部分)\n")
         for (j in seq_along(msg$content)) {
@@ -1441,9 +1448,9 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
     
     for (line in lines) {
       if (!startsWith(line, "data: ")) next
-      
       json_str <- sub("^data: ", "", line)
       json_str <- trimws(json_str)
+      
       if (json_str == "" || json_str == "[DONE]") next
       
       tryCatch({
@@ -1456,13 +1463,16 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
           r_c <- delta$reasoning_content
           if (!is.null(r_c) && !is.na(r_c[1]) && nchar(r_c) > 0) {
             r_c <- safe_string(r_c)
+            
             if (!reasoning_header_shown && show_reasoning) {
               if (content_header_shown) cat("\n")
               msg_stream("AI Thinking", "💭")
               reasoning_header_shown <<- TRUE
             }
+            
             current_state <<- "reasoning"
             full_reasoning <<- paste0(full_reasoning, r_c)
+            
             if (show_reasoning) {
               cat(yellow(r_c))
             }
@@ -1472,13 +1482,16 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
           c_c <- delta$content
           if (!is.null(c_c) && !is.na(c_c[1]) && nchar(c_c) > 0) {
             c_c <- safe_string(c_c)
+            
             if (!content_header_shown) {
               if (reasoning_header_shown && show_reasoning) cat("\n\n")
               msg_stream("AI Response", "🤖")
               content_header_shown <<- TRUE
             }
+            
             current_state <<- "content"
             full_content <<- paste0(full_content, c_c)
+            
             cat(green(c_c))
           }
           
@@ -1520,6 +1533,7 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
   # 检测、下载并渲染图片
   if (nchar(full_content) > 0) {
     image_urls <- extract_image_urls(full_content)
+    
     if (length(image_urls) > 0) {
       cat("\n")
       msg_header("检测到生成的图片", "🖼️")
@@ -1538,9 +1552,11 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
         
         # 1. 下载图片
         local_path <- download_image(url, gen_dir)
+        
         if (!is.null(local_path)) {
           # 2. 渲染图片
           render_image(local_path)
+          
           # 3. 显示完整路径
           cat(silver(paste("  保存路径:", normalizePath(local_path))), "\n")
         }
@@ -1553,6 +1569,194 @@ stream_chat <- function(messages, show_reasoning = TRUE) {
   }
   
   return(full_content)
+}
+
+# =========================================================================
+# 11. 图片生成工具（🆕 新增）
+# =========================================================================
+
+# 异步图片生成（ModelScope 风格）
+generate_image_async <- function(prompt, negative_prompt = NULL, 
+                                 size = NULL, n = 1) {
+  if (is.null(chat_context$imagegen_config)) {
+    msg_error("未配置图片生成，请在 .env 中添加 imagegen 配置")
+    cat(silver("\n示例配置:\n"))
+    cat(silver("imagegen:\n"))
+    cat(silver("  base_url: \"https://api-inference.modelscope.cn/\"\n"))
+    cat(silver("  model: \"Tongyi-MAI/Z-Image-Turbo\"\n"))
+    cat(silver("  api_key: \"<MODELSCOPE_TOKEN>\"\n"))
+    cat(silver("  timeout: 300\n"))
+    cat(silver("  poll_interval: 5\n\n"))
+    return(NULL)
+  }
+  
+  cfg <- chat_context$imagegen_config
+  base_url <- cfg$base_url
+  model <- cfg$model
+  api_key <- cfg$api_key
+  timeout_sec <- cfg$timeout %||% 300
+  poll_interval <- cfg$poll_interval %||% 5
+  
+  msg_debug(paste("图片生成 API:", base_url))
+  msg_debug(paste("模型:", model))
+  msg_debug(paste("提示词:", prompt))
+  
+  # 构建请求体
+  body <- list(
+    model = model,
+    prompt = prompt,
+    n = n
+  )
+  
+  if (!is.null(negative_prompt)) {
+    body$negative_prompt <- negative_prompt
+  }
+  if (!is.null(size)) {
+    body$size <- size
+  }
+  
+  headers <- add_headers(
+    `Authorization` = paste("Bearer", api_key),
+    `Content-Type` = "application/json",
+    `X-ModelScope-Async-Mode` = "true"
+  )
+  
+  # 步骤 1: 提交任务
+  cli_process_start("🎨 提交图片生成任务...")
+  
+  tryCatch({
+    resp <- POST(
+      paste0(base_url, "v1/images/generations"),
+      headers,
+      body = jsonlite::toJSON(body, auto_unbox = TRUE, 
+                              ensure_ascii = FALSE),
+      encode = "json",
+      timeout(30)
+    )
+    
+    if (status_code(resp) != 200) {
+      cli_process_failed()
+      error_text <- content(resp, as = "text", encoding = "UTF-8")
+      msg_error(paste("任务提交失败:", status_code(resp)))
+      msg_debug(error_text)
+      return(NULL)
+    }
+    
+    result <- content(resp, as = "parsed")
+    task_id <- result$task_id
+    cli_process_done()
+    msg_success(paste("✓ 任务已提交, ID:", task_id))
+    
+  }, error = function(e) {
+    cli_process_failed()
+    msg_error(paste("网络错误:", e$message))
+    return(NULL)
+  })
+  
+  # 步骤 2: 轮询任务状态
+  cli_process_start(paste("🔄 等待生成完成 (最长", timeout_sec, "秒)..."))
+  
+  start_time <- Sys.time()
+  headers_poll <- add_headers(
+    `Authorization` = paste("Bearer", api_key),
+    `Content-Type` = "application/json",
+    `X-ModelScope-Task-Type` = "image_generation"
+  )
+  
+  image_urls <- NULL
+  
+  repeat {
+    # 检查超时
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    if (elapsed > timeout_sec) {
+      cli_process_failed()
+      msg_error("图片生成超时")
+      return(NULL)
+    }
+    
+    # 查询任务状态
+    tryCatch({
+      resp <- GET(
+        paste0(base_url, "v1/tasks/", task_id),
+        headers_poll,
+        timeout(10)
+      )
+      
+      if (status_code(resp) != 200) {
+        msg_warning(paste("查询失败:", status_code(resp)))
+        Sys.sleep(poll_interval)
+        next
+      }
+      
+      data <- content(resp, as = "parsed")
+      status <- data$task_status
+      
+      msg_debug(paste("任务状态:", status, "| 已等待:", round(elapsed, 1), "秒"))
+      
+      if (status == "SUCCEED") {
+        cli_process_done()
+        image_urls <- data$output_images
+        msg_success(paste("✓ 生成成功! 共", length(image_urls), "张图片"))
+        break
+      } else if (status == "FAILED") {
+        cli_process_failed()
+        msg_error("图片生成失败")
+        if (!is.null(data$error_message)) {
+          cat(red(paste("错误:", data$error_message)), "\n")
+        }
+        return(NULL)
+      } else if (status %in% c("PENDING", "RUNNING")) {
+        # 继续等待
+        Sys.sleep(poll_interval)
+      } else {
+        msg_warning(paste("未知状态:", status))
+        Sys.sleep(poll_interval)
+      }
+      
+    }, error = function(e) {
+      msg_debug(paste("查询错误:", e$message))
+      Sys.sleep(poll_interval)
+    })
+  }
+  
+  # 步骤 3: 下载并保存图片
+  if (is.null(image_urls) || length(image_urls) == 0) {
+    msg_error("未获取到图片 URL")
+    return(NULL)
+  }
+  
+  saved_paths <- list()
+  gen_dir <- chat_context$image_gen_dir
+  
+  if (!dir.exists(gen_dir)) {
+    dir.create(gen_dir, recursive = TRUE)
+  }
+  
+  cat("\n")
+  msg_header("下载生成的图片", "⬇️")
+  
+  for (i in seq_along(image_urls)) {
+    url <- image_urls[[i]]
+    cat(cyan(sprintf("\n[%d/%d] 下载中...\n", i, length(image_urls))))
+    
+    local_path <- download_image(url, gen_dir)
+    
+    if (!is.null(local_path)) {
+      saved_paths <- append(saved_paths, local_path)
+      
+      # 渲染图片
+      render_image(local_path)
+      
+      # 显示完整路径
+      cat(silver(paste("  路径:", normalizePath(local_path))), "\n")
+    }
+  }
+  
+  # 汇总
+  cat("\n")
+  msg_success(paste("共保存", length(saved_paths), "张图片到", gen_dir))
+  
+  return(saved_paths)
 }
 
 # =========================================================================
@@ -1593,6 +1797,7 @@ handle_command <- function(input) {
         "/imageinfo        - 查看待发送图片",
         "/clearimages      - 清除待发送图片",
         "/imagedir [path]  - 设置图片保存目录",
+        "/imagegen [p]     - 🆕 AI 生成图片 (支持高级参数)",
         "",
         "=== 系统配置 ===",
         "/init             - 重新配置 API",
@@ -1607,6 +1812,13 @@ handle_command <- function(input) {
         "/help             - 显示此帮助",
         "/quit, /exit      - 退出程序"
       ))
+      
+      # 显示高级用法
+      cat(cyan$bold("\n【/imagegen 高级用法】\n"))
+      cat(silver("基础: /imagegen A golden cat\n"))
+      cat(silver("负面提示: /imagegen A cat --negative ugly, blurry\n"))
+      cat(silver("指定尺寸: /imagegen A cat --size 1024x1024\n"))
+      cat(silver("生成多张: /imagegen A cat --n 4\n\n"))
     },
     
     # === 调试模式 ===
@@ -1631,6 +1843,99 @@ handle_command <- function(input) {
       } else {
         chat_context$image_gen_dir <- args
         msg_success(paste("图片保存目录已设置为:", args))
+      }
+    },
+    
+    # === 🆕 图片生成指令 ===
+    "/imagegen" = {
+      if (nchar(args) == 0) {
+        msg_info("用法: /imagegen <提示词>")
+        msg_info("示例: /imagegen A golden cat sitting on a rainbow")
+        
+        if (!is.null(chat_context$imagegen_config)) {
+          msg_info(paste("当前模型:", chat_context$imagegen_config$model))
+        } else {
+          msg_warning("未配置图片生成")
+        }
+        return()
+      }
+      
+      # 解析参数（支持高级选项）
+      prompt <- args
+      negative_prompt <- NULL
+      size <- NULL
+      n <- 1
+      
+      # 检查是否有高级参数（可选功能）
+      if (grepl("--negative", args)) {
+        parts <- strsplit(args, "--negative")[[1]]
+        prompt <- trimws(parts[1])
+        
+        # 提取负面提示词（到下一个 -- 参数或结尾）
+        neg_part <- parts[2]
+        if (grepl("--", neg_part)) {
+          neg_split <- strsplit(neg_part, "--")[[1]]
+          negative_prompt <- trimws(neg_split[1])
+        } else {
+          negative_prompt <- trimws(neg_part)
+        }
+        msg_debug(paste("负面提示词:", negative_prompt))
+      }
+      
+      if (grepl("--size", args)) {
+        size_match <- regmatches(args, regexpr("--size\\s+[0-9]+x[0-9]+", args))
+        if (length(size_match) > 0) {
+          size <- gsub("--size\\s+", "", size_match)
+          msg_debug(paste("图片尺寸:", size))
+          # 从原始提示词中移除 size 参数
+          prompt <- gsub("--size\\s+[0-9]+x[0-9]+", "", prompt)
+          prompt <- trimws(prompt)
+        }
+      }
+      
+      if (grepl("--n", args)) {
+        n_match <- regmatches(args, regexpr("--n\\s+[0-9]+", args))
+        if (length(n_match) > 0) {
+          n <- as.integer(gsub("--n\\s+", "", n_match))
+          msg_debug(paste("生成数量:", n))
+          # 从原始提示词中移除 n 参数
+          prompt <- gsub("--n\\s+[0-9]+", "", prompt)
+          prompt <- trimws(prompt)
+        }
+      }
+      
+      # 调用生成函数
+      result <- generate_image_async(
+        prompt = prompt,
+        negative_prompt = negative_prompt,
+        size = size,
+        n = n
+      )
+      
+      # 可选：将生成的图片加入对话历史
+      if (!is.null(result) && length(result) > 0) {
+        image_info <- paste(
+          "用户请求生成图片:",
+          prompt,
+          "\n生成结果:",
+          length(result), "张图片已保存"
+        )
+        
+        chat_context$history <- append(
+          chat_context$history,
+          list(
+            list(
+              role = "user",
+              content = paste0("【图片生成请求】", prompt)
+            ),
+            list(
+              role = "assistant",
+              content = paste0("已生成 ", length(result), " 张图片并保存到 ", 
+                               chat_context$image_gen_dir)
+            )
+          )
+        )
+        save_session()
       }
     },
     
@@ -1762,6 +2067,7 @@ handle_command <- function(input) {
       
       # 5. 提取文本
       cli_process_start("📄 提取 PDF 文本...")
+      
       tryCatch({
         pdf_text <- pdftools::pdf_text(filepath)
         full_text <- paste(pdf_text, collapse = "\n\n")
@@ -1865,8 +2171,8 @@ handle_command <- function(input) {
               )
             )
             save_session()
-            
             msg_success("摘要已添加")
+            
             cat(cyan("\n【摘要】\n"))
             cat(silver(final_summary), "\n\n")
           },
@@ -1915,7 +2221,7 @@ handle_command <- function(input) {
               50  # OpenAI 等可以大一些
             }
             
-            msg_debug(paste("批次大小:", batch_size))
+            msg_debug(paste("批次大小:",batch_size))
             
             all_embeddings <- list()
             
@@ -1936,7 +2242,6 @@ handle_command <- function(input) {
                 cat("  1. 减小分块大小（当前可能单块过大）\n")
                 cat("  2. 改用摘要模式（选项 2）\n")
                 cat("  3. 检查 embedding 模型配置\n\n")
-                
                 return()
               }
               
@@ -1997,7 +2302,6 @@ handle_command <- function(input) {
             msg_warning("无效选择")
           }
         )
-        
       }, error = function(e) {
         cli_process_failed()
         msg_error(paste("处理失败:", e$message))
@@ -2034,18 +2338,20 @@ handle_command <- function(input) {
                 silver(paste("(", pdf_data$chunk_count, "个分块)")),
                 "\n")
           }
-          
           cat("\n")
+          
           cat(magenta("选项:\n"))
           cat(silver("  输入编号 - 卸载指定 PDF\n"))
           cat(silver("  all      - 卸载所有 PDF\n"))
           cat(silver("  回车     - 取消操作\n\n"))
           
           choice <- read_console("请选择: ")
+          
           if (is.null(choice) || nchar(trimws(choice)) == 0) {
             msg_info("已取消")
             return()
           }
+          
           args <- trimws(choice)
         }
         
@@ -2067,6 +2373,7 @@ handle_command <- function(input) {
             auto_unbox = TRUE,
             ensure_ascii = FALSE
           )
+          
           con <- file(chat_context$session_file, "w", encoding = "UTF-8")
           writeLines(enc2utf8(json_text), con, useBytes = TRUE)
           close(con)
@@ -2105,6 +2412,7 @@ handle_command <- function(input) {
           auto_unbox = TRUE,
           ensure_ascii = FALSE
         )
+        
         con <- file(chat_context$session_file, "w", encoding = "UTF-8")
         writeLines(enc2utf8(json_text), con, useBytes = TRUE)
         close(con)
@@ -2117,7 +2425,6 @@ handle_command <- function(input) {
         } else {
           msg_info("所有 PDF 已清空")
         }
-        
       }, error = function(e) {
         msg_error(paste("卸载失败:", e$message))
       })
@@ -2127,6 +2434,7 @@ handle_command <- function(input) {
     "/newsession" = {
       msg_header("创建新会话", "🆕")
       confirm <- read_console("确认创建新会话? 当前会话将保存 (y/N): ")
+      
       if (tolower(trimws(confirm)) == "y") {
         save_session()
         chat_context$history <- list()
@@ -2149,12 +2457,14 @@ handle_command <- function(input) {
       }
       
       files <- list.files(session_dir, pattern = "^chat_.*\\.json$", full.names = TRUE)
+      
       if (length(files) == 0) {
         msg_warning("暂无会话记录")
         return()
       }
       
       msg_header("可切换的会话", "🔄")
+      
       for (i in seq_along(files)) {
         title <- tryCatch({
           con <- file(files[i], "r", encoding = "UTF-8")
@@ -2175,6 +2485,7 @@ handle_command <- function(input) {
       }
       
       choice <- read_console("\n选择会话编号 (回车取消): ")
+      
       if (nchar(trimws(choice)) > 0) {
         idx <- as.integer(choice)
         if (!is.na(idx) && idx >= 1 && idx <= length(files)) {
@@ -2224,6 +2535,7 @@ handle_command <- function(input) {
       if (nchar(args) == 0) {
         msg_info(paste("当前标题:", chat_context$session_title))
         new_title <- read_console("输入新标题 (回车取消): ")
+        
         if (nchar(trimws(new_title)) > 0) {
           chat_context$session_title <- trimws(new_title)
           save_session()
@@ -2249,6 +2561,7 @@ handle_command <- function(input) {
         cat(silver("  3. 取消操作\n\n"))
         
         choice <- read_console("请选择 (1-3): ")
+        
         switch(
           trimws(choice),
           "1" = {
@@ -2287,6 +2600,7 @@ handle_command <- function(input) {
     # === 初始化配置 ===
     "/init" = {
       msg_header("初始化配置", "⚙️")
+      
       u <- read_console(paste0("Endpoint [", chat_context$config$baseurl, "]: "))
       if (nchar(u) > 0) chat_context$config$baseurl <- u
       
@@ -2341,6 +2655,7 @@ handle_command <- function(input) {
       }
       
       msg_header("删除记忆", "🗑️")
+      
       memory_lines <- strsplit(chat_context$memory_slot, "\n")[[1]]
       memory_lines <- memory_lines[nchar(trimws(memory_lines)) > 0]
       
@@ -2356,6 +2671,7 @@ handle_command <- function(input) {
       cat("\n")
       
       choice <- read_console("输入要删除的记忆编号 (回车取消): ")
+      
       if (is.null(choice) || nchar(trimws(choice)) == 0) {
         msg_info("已取消")
         return()
@@ -2373,6 +2689,7 @@ handle_command <- function(input) {
       save_session()
       
       msg_success(paste("已删除:", deleted_item))
+      
       if (length(memory_lines) > 0) {
         cat(silver(paste("\n剩余记忆:\n", chat_context$memory_slot, "\n\n")))
       } else {
@@ -2383,6 +2700,7 @@ handle_command <- function(input) {
     # === 修改系统提示词 ===
     "/systemprompt" = {
       msg_header("修改系统提示词", "⚙️")
+      
       cat(magenta$bold("【当前系统提示词】\n"))
       cat(silver(chat_context$base_system), "\n\n")
       
@@ -2392,16 +2710,19 @@ handle_command <- function(input) {
       cat("  3. 取消\n\n")
       
       choice <- read_console("请选择 (1-3): ")
+      
       switch(
         trimws(choice),
         "1" = {
           filepath <- read_console("输入文件路径: ")
+          
           if (is.null(filepath) || nchar(trimws(filepath)) == 0) {
             msg_info("已取消")
             return()
           }
           
           filepath <- trimws(filepath)
+          
           if (!file.exists(filepath)) {
             msg_error("文件不存在")
             return()
@@ -2429,12 +2750,14 @@ handle_command <- function(input) {
         "2" = {
           cat(cyan("\n请输入新的系统提示词 (输入空行结束):\n"))
           new_prompt <- read_console("> ")
+          
           if (is.null(new_prompt)) {
             msg_info("已取消")
             return()
           }
           
           lines <- c(new_prompt)
+          
           repeat {
             line <- read_console("> ")
             if (is.null(line) || nchar(trimws(line)) == 0) break
@@ -2442,6 +2765,7 @@ handle_command <- function(input) {
           }
           
           final_prompt <- paste(lines, collapse = "\n")
+          
           if (nchar(trimws(final_prompt)) > 0) {
             chat_context$base_system <- safe_string(final_prompt)
             save_session()
@@ -2492,6 +2816,7 @@ handle_command <- function(input) {
           cat(magenta$bold("【压缩前完整历史】\n\n"))
           for (i in seq_along(chat_context$full_history)) {
             msg <- chat_context$full_history[[i]]
+            
             role_label <- switch(
               msg$role,
               "user" = blue$bold("👤 User"),
@@ -2528,6 +2853,7 @@ handle_command <- function(input) {
           cat(yellow$bold("【压缩后新对话】\n\n"))
           for (i in seq_along(chat_context$history)) {
             msg <- chat_context$history[[i]]
+            
             role_label <- switch(
               msg$role,
               "user" = blue$bold("👤 User"),
@@ -2563,6 +2889,7 @@ handle_command <- function(input) {
         } else {
           for (i in seq_along(chat_context$history)) {
             msg <- chat_context$history[[i]]
+            
             role_label <- switch(
               msg$role,
               "user" = blue$bold("👤 User"),
@@ -2604,6 +2931,7 @@ handle_command <- function(input) {
       }
       
       cli_process_start("正在压缩历史对话...")
+      
       summary <- simple_chat_request(append(
         chat_context$history,
         list(list(
@@ -2611,6 +2939,7 @@ handle_command <- function(input) {
           content = "请用300字以内简要总结上述对话的核心内容和关键信息,保留重要细节。用中文回答。"
         ))
       ))
+      
       cli_process_done()
       
       if (!is.null(summary) && nchar(summary) > 0) {
@@ -2631,16 +2960,19 @@ handle_command <- function(input) {
     # === 列出所有会话 ===
     "/sessions" = {
       session_dir <- file.path(getwd(), "chat_logs")
+      
       if (!dir.exists(session_dir)) {
         msg_warning("暂无会话记录")
         return()
       }
       
       files <- list.files(session_dir, pattern = "^chat_.*\\.json$", full.names = TRUE)
+      
       if (length(files) == 0) {
         msg_warning("暂无会话记录")
       } else {
         msg_header("历史会话列表", "📁")
+        
         for (f in files) {
           title <- tryCatch({
             con <- file(f, "r", encoding = "UTF-8")
@@ -2708,7 +3040,7 @@ main <- function() {
   chat_context$image_gen_dir <- args$output_dir
   
   # 启动标题
-  cli_rule(left = cyan$bold("🤖 Starlight CLI v2.4.0"), right = "RAG Full Edition")
+  cli_rule(left = cyan$bold("🤖 Starlight CLI v2.5.0"), right = "RAG + ImageGen Edition")
   
   # 加载配置
   if (!file.exists(".env")) {
@@ -2716,8 +3048,9 @@ main <- function() {
     msg_info("请使用 /init 进行初始配置")
     chat_context$config <- list(baseurl = "", api_key = "")
     chat_context$embedding_config <- NULL
+    chat_context$imagegen_config <- NULL
   } else {
-    full_config <- yaml::read_yaml(".env")
+    full_config <- invisible(yaml::read_yaml(".env"))
     
     # 1. 加载全局 embedding 配置
     if (!is.null(full_config$embedding)) {
@@ -2730,8 +3063,20 @@ main <- function() {
       msg_debug("未配置 Embedding")
     }
     
-    # 2. 选择聊天 Provider
-    available_providers <- setdiff(names(full_config), "embedding")
+    # 2. 🆕 加载图片生成配置
+    if (!is.null(full_config$imagegen)) {
+      chat_context$imagegen_config <- full_config$imagegen
+      msg_debug("已加载图片生成配置")
+      msg_debug(paste("  模型:", chat_context$imagegen_config$model))
+      msg_debug(paste("  地址:", chat_context$imagegen_config$base_url))
+    } else {
+      chat_context$imagegen_config <- NULL
+      msg_debug("未配置图片生成")
+    }
+    
+    # 3. 选择聊天 Provider
+    available_providers <- setdiff(names(full_config), c("embedding", "imagegen"))
+    
     prov <- if (!is.null(args$provider)) {
       args$provider
     } else {
@@ -2746,7 +3091,7 @@ main <- function() {
     chat_context$config <- full_config[[prov]]
     chat_context$current_provider <- prov
     
-    # 3. 选择聊天模型
+    # 4. 选择聊天模型
     chat_context$current_model <- if (!is.null(args$model)) {
       args$model
     } else {
@@ -2756,7 +3101,7 @@ main <- function() {
     msg_info(paste("Provider:", prov))
     msg_info(paste("Model:", chat_context$current_model))
     
-    # 4. 显示标题模型配置
+    # 5. 显示标题模型配置
     if (!is.null(chat_context$config$title_model)) {
       msg_debug(paste("标题模型:", chat_context$config$title_model))
     } else {
@@ -2764,6 +3109,7 @@ main <- function() {
     }
     
     msg_info(paste("图片保存目录:", chat_context$image_gen_dir))
+    
     fetch_remote_models(silent_on_error = TRUE)
   }
   
@@ -2805,6 +3151,7 @@ main <- function() {
     if (!is.null(reply) && nchar(reply) > 0) {
       add_conversation(args$question, reply, chat_context$pending_images)
     }
+    
     return()
   }
   

@@ -58,4 +58,4 @@ chat_logs/*.json
 prompts/*.txt
 
 # image_gen
-
+image_gen/*.jpg
